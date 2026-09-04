@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+dados.db
+build/
+dist/
+*.spec
+Output/
