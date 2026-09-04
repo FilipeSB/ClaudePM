@@ -139,6 +139,38 @@ O instalador final fica em `Output/GestaoProjetos-Setup.exe`.
 > a instalação, apenas mostra um aviso que o utilizador tem de confirmar
 > ("Mais informações" → "Executar mesmo assim").
 
+### Reduzir falsos positivos de antivírus / Windows Defender
+
+Foram já aplicadas três medidas gratuitas que reduzem bastante a
+probabilidade de o Windows ou um antivírus assinalarem o executável
+como suspeito, mesmo sem assinatura digital:
+
+1. **`--onedir` em vez de `--onefile`** — o modo `--onefile` extrai-se
+   sozinho para uma pasta temporária sempre que arranca, um padrão de
+   comportamento muito associado a malware. Agora gera-se uma pasta normal
+   (`GestaoProjetos.exe` + ficheiros de suporte ao lado), sem esse
+   comportamento suspeito.
+2. **`--noupx`** — desativa a compressão UPX, outro sinal clássico usado
+   por heurísticas de antivírus (muito malware também usa UPX para se
+   disfarçar).
+3. **Metadados de versão** (`version_info.txt`) — o `.exe` passa a ter
+   nome de produto, empresa, descrição e versão visíveis nas Propriedades
+   do ficheiro no Windows, tornando-o menos "anónimo".
+
+O que **não** está resolvido, por implicar custos:
+- **Assinatura digital de código** — é o que faz o Windows mostrar o nome
+  do editor em vez de "Editor desconhecido" no SmartScreen, e reduz
+  drasticamente os avisos. Certificados pagos custam tipicamente 70-400€/ano.
+- **Alternativa gratuita**, já que o teu repositório é público: o
+  [SignPath.io](https://signpath.io) oferece assinatura de código gratuita
+  para projetos open-source (é usado por projetos como o Git for Windows).
+  Requer candidatura e aprovação, mas não tem custo.
+- Se o Windows Defender assinalar o ficheiro como vírus (falso positivo),
+  podes submetê-lo para análise da Microsoft em
+  https://www.microsoft.com/en-us/wdsi/filesubmission — normalmente é
+  corrigido em 24-48h e ajuda a "reputação" do ficheiro para todos os
+  utilizadores.
+
 ## Próximos passos sugeridos
 
 - Histórico de alterações de estado (auditoria).
