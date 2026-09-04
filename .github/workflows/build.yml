@@ -1,0 +1,37 @@
+name: Gerar executável Windows
+
+# Corre automaticamente sempre que enviares alterações para o ramo "main",
+# e também pode ser corrido manualmente a partir do separador "Actions" no GitHub.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Obter o código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Gerar o executável (.exe)
+        run: python build_exe.py
+
+      - name: Gerar o instalador (setup.exe) com Inno Setup
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Publicar o instalador como artefacto descarregável
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestaoProjetos-Setup
+          path: Output/GestaoProjetos-Setup.exe
