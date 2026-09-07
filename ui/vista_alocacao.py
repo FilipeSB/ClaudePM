@@ -1,54 +1,178 @@
+from datetime import date
+
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPushButton, QLabel, QFileDialog, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QPushButton,
+    QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFileDialog, QMessageBox
 )
 from PySide6.QtGui import QColor
-from datetime import date
+
 from database.db import get_session
-from database.models import Pessoa
+from database.models import Pessoa, Tarefa, Projeto, Cliente
+from utils.periodos import PERIODOS, intervalo_periodo, periodo_seguinte, periodo_anterior, descricao_periodo
 from utils.exportacao import exportar_excel, exportar_pdf
+
+
+def _sobrepoe(inicio1, fim1, inicio2, fim2):
+    if not all([inicio1, fim1, inicio2, fim2]):
+        return False
+    return inicio1 <= fim2 and inicio2 <= fim1
 
 
 class VistaAlocacao(QWidget):
     """
-    Mostra, para cada pessoa ativa, a soma das percentagens de alocação
-    em tarefas correntes (cuja data de hoje esteja entre início e fim),
-    assinalando visualmente sobre-alocação (>100%).
+    Percentagem de alocação de cada pessoa, agregada num período (Semanal /
+    Mensal / Anual, navegável), com filtros adicionais por Cliente, Projeto
+    e Tarefa. Assinala visualmente sobre-alocação (>100%).
     """
 
     def __init__(self):
         super().__init__()
+        self.referencia = date.today()
         layout = QVBoxLayout(self)
 
-        topo = QHBoxLayout()
-        topo.addWidget(QLabel("Percentagem de alocação atual (tarefas em curso hoje) por pessoa"))
-        topo.addStretch()
-        btn_atualizar = QPushButton("Atualizar")
-        btn_atualizar.clicked.connect(self.refresh)
-        topo.addWidget(btn_atualizar)
+        # ---------------- Navegação de período ----------------
+        nav = QHBoxLayout()
+        nav.addWidget(QLabel("Período:"))
+        self.periodo_combo = QComboBox()
+        self.periodo_combo.addItems(PERIODOS)
+        self.periodo_combo.setCurrentText("Mensal")
+        nav.addWidget(self.periodo_combo)
+
+        self.btn_anterior = QPushButton("◀ Anterior")
+        self.btn_seguinte = QPushButton("Seguinte ▶")
+        self.btn_hoje = QPushButton("Hoje")
+        nav.addWidget(self.btn_anterior)
+        nav.addWidget(self.btn_seguinte)
+        nav.addWidget(self.btn_hoje)
+
+        self.label_periodo = QLabel()
+        self.label_periodo.setStyleSheet("font-weight: bold; font-size: 13px;")
+        nav.addWidget(self.label_periodo)
+        nav.addStretch()
 
         btn_excel = QPushButton("Exportar Excel")
-        btn_excel.clicked.connect(self._exportar_excel)
-        topo.addWidget(btn_excel)
-
         btn_pdf = QPushButton("Exportar PDF")
-        btn_pdf.clicked.connect(self._exportar_pdf)
-        topo.addWidget(btn_pdf)
+        nav.addWidget(btn_excel)
+        nav.addWidget(btn_pdf)
+        layout.addLayout(nav)
 
-        layout.addLayout(topo)
+        # ---------------- Filtros ----------------
+        filtros_box = QGroupBox("Filtros")
+        filtros_layout = QHBoxLayout()
 
+        self.filtro_cliente = QComboBox()
+        self.filtro_projeto = QComboBox()
+        self.filtro_tarefa = QComboBox()
+
+        for label, combo in [
+            ("Cliente", self.filtro_cliente), ("Projeto", self.filtro_projeto),
+            ("Tarefa", self.filtro_tarefa),
+        ]:
+            bloco = QVBoxLayout()
+            bloco.addWidget(QLabel(label))
+            bloco.addWidget(combo)
+            filtros_layout.addLayout(bloco)
+
+        filtros_box.setLayout(filtros_layout)
+        layout.addWidget(filtros_box)
+
+        # ---------------- Tabela ----------------
         self.tabela = QTableWidget()
         self.tabela.setColumnCount(5)
         self.tabela.setHorizontalHeaderLabels(
-            ["Pessoa", "Equipa", "Perfil", "% Alocada (hoje)", "Detalhe das Tarefas"]
+            ["Pessoa", "Equipa", "Perfil", "% Alocada no período", "Detalhe das Tarefas"]
         )
         self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.tabela)
 
+        # eventos
+        self.periodo_combo.currentIndexChanged.connect(self.refresh)
+        self.btn_anterior.clicked.connect(self._ir_anterior)
+        self.btn_seguinte.clicked.connect(self._ir_seguinte)
+        self.btn_hoje.clicked.connect(self._ir_hoje)
+        self.filtro_cliente.currentIndexChanged.connect(self._ao_mudar_cliente)
+        self.filtro_projeto.currentIndexChanged.connect(self._ao_mudar_projeto)
+        self.filtro_tarefa.currentIndexChanged.connect(self.refresh)
+        btn_excel.clicked.connect(self._exportar_excel)
+        btn_pdf.clicked.connect(self._exportar_pdf)
+
+        self._popular_filtros()
         self.refresh()
 
+    # ------------------------------------------------------------------
+    def _popular_filtros(self, manter_projeto=False, manter_tarefa=False):
+        session = get_session()
+        try:
+            def preencher(combo, itens, todos_label, manter):
+                atual = combo.currentData() if manter else None
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItem(todos_label, None)
+                for item_id, item_label in itens:
+                    combo.addItem(item_label, item_id)
+                if atual is not None:
+                    idx = combo.findData(atual)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
+
+            # O cliente mantém sempre a sua própria seleção ao recarregar
+            # (só muda por ação direta do utilizador nesse combo).
+            preencher(self.filtro_cliente, [(c.id, c.nome) for c in session.query(Cliente).order_by(Cliente.nome)], "Todos", manter=True)
+
+            query_projetos = session.query(Projeto)
+            cliente_id = self.filtro_cliente.currentData()
+            if cliente_id:
+                query_projetos = query_projetos.filter_by(cliente_id=cliente_id)
+            preencher(self.filtro_projeto, [(p.id, p.nome) for p in query_projetos.order_by(Projeto.nome)], "Todos", manter=manter_projeto)
+
+            query_tarefas = session.query(Tarefa)
+            projeto_id = self.filtro_projeto.currentData()
+            if projeto_id:
+                query_tarefas = query_tarefas.filter_by(projeto_id=projeto_id)
+            elif cliente_id:
+                query_tarefas = query_tarefas.join(Projeto).filter(Projeto.cliente_id == cliente_id)
+            preencher(self.filtro_tarefa, [(t.id, t.nome) for t in query_tarefas.order_by(Tarefa.nome)], "Todas", manter=manter_tarefa)
+        finally:
+            session.close()
+
+    def _ao_mudar_cliente(self):
+        # cliente mudou: reiniciar projeto e tarefa (podem já não fazer sentido)
+        self._popular_filtros(manter_projeto=False, manter_tarefa=False)
+        self.refresh()
+
+    def _ao_mudar_projeto(self):
+        # projeto mudou: manter cliente, reiniciar tarefa
+        self._popular_filtros(manter_projeto=True, manter_tarefa=False)
+        self.refresh()
+
+    def refresh_filtros(self):
+        self._popular_filtros(manter_projeto=True, manter_tarefa=True)
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    def _ir_anterior(self):
+        self.referencia = periodo_anterior(self.periodo_combo.currentText(), self.referencia)
+        self.refresh()
+
+    def _ir_seguinte(self):
+        self.referencia = periodo_seguinte(self.periodo_combo.currentText(), self.referencia)
+        self.refresh()
+
+    def _ir_hoje(self):
+        self.referencia = date.today()
+        self.refresh()
+
+    # ------------------------------------------------------------------
     def refresh(self):
-        hoje = date.today()
+        periodo = self.periodo_combo.currentText()
+        self.label_periodo.setText(descricao_periodo(periodo, self.referencia))
+        periodo_ini, periodo_fim = intervalo_periodo(periodo, self.referencia)
+
+        cliente_id = self.filtro_cliente.currentData()
+        projeto_id = self.filtro_projeto.currentData()
+        tarefa_id = self.filtro_tarefa.currentData()
+
         session = get_session()
         try:
             pessoas = session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome).all()
@@ -59,9 +183,19 @@ class VistaAlocacao(QWidget):
                 detalhe = []
                 for a in pessoa.alocacoes:
                     t = a.tarefa
-                    if t and t.data_inicio and t.data_fim and t.data_inicio <= hoje <= t.data_fim:
-                        total += float(a.percentagem or 0)
-                        detalhe.append(f"{t.nome} ({a.percentagem}%)")
+                    if not t or not t.data_inicio or not t.data_fim:
+                        continue
+                    if not _sobrepoe(periodo_ini, periodo_fim, t.data_inicio, t.data_fim):
+                        continue
+                    if tarefa_id and t.id != tarefa_id:
+                        continue
+                    if projeto_id and t.projeto_id != projeto_id:
+                        continue
+                    if cliente_id and (not t.projeto or t.projeto.cliente_id != cliente_id):
+                        continue
+
+                    total += float(a.percentagem or 0)
+                    detalhe.append(f"{t.nome} ({a.percentagem}%)")
 
                 self.tabela.setItem(row, 0, QTableWidgetItem(pessoa.nome))
                 self.tabela.setItem(row, 1, QTableWidgetItem(pessoa.equipa.nome if pessoa.equipa else ""))
@@ -69,15 +203,14 @@ class VistaAlocacao(QWidget):
 
                 item_pct = QTableWidgetItem(f"{total:.0f}%")
                 if total > 100:
-                    item_pct.setBackground(QColor(255, 190, 190))   # vermelho claro - sobre-alocada
+                    item_pct.setBackground(QColor(255, 190, 190))
                 elif total == 100:
-                    item_pct.setBackground(QColor(200, 240, 200))   # verde - alocação total
+                    item_pct.setBackground(QColor(200, 240, 200))
                 elif total == 0:
-                    item_pct.setBackground(QColor(230, 230, 230))   # cinza - sem alocação
+                    item_pct.setBackground(QColor(230, 230, 230))
                 else:
-                    item_pct.setBackground(QColor(255, 245, 200))   # amarelo - parcial
+                    item_pct.setBackground(QColor(255, 245, 200))
                 self.tabela.setItem(row, 3, item_pct)
-
                 self.tabela.setItem(row, 4, QTableWidgetItem(", ".join(detalhe)))
         finally:
             session.close()

@@ -1,13 +1,13 @@
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QComboBox, QDateEdit, QDialogButtonBox,
-    QVBoxLayout, QHBoxLayout, QMessageBox, QTableWidget, QTableWidgetItem,
-    QPushButton, QDoubleSpinBox, QWidget, QHeaderView, QAbstractItemView, QLabel
+    QVBoxLayout, QHBoxLayout, QMessageBox, QPushButton, QDoubleSpinBox,
+    QWidget, QLabel, QScrollArea, QFrame
 )
-from PySide6.QtCore import QDate
 from database.db import get_session
-from database.models import Tarefa, Projeto, Pessoa, Alocacao, ESTADOS_TAREFA
+from database.models import Tarefa, Projeto, Pessoa, Alocacao, ESTADOS_TAREFA, CATEGORIA_LABELS
 from ui.base_crud import BaseCrudWidget
 from ui.vista_projetos import qdate_to_pydate, pydate_to_qdate
+from utils.calculos import horas_para_percentagem, percentagem_para_horas, horas_base_por_dia
 
 
 def sobreposicao_datas(inicio1, fim1, inicio2, fim2):
@@ -25,7 +25,7 @@ def verificar_sobrealocacoes(session, tarefa_id, data_inicio, data_fim, alocacoe
     Retorna lista de strings descrevendo os conflitos encontrados (vazia se OK).
     """
     conflitos = []
-    for pessoa_id, pct_nova in alocacoes_novas:
+    for pessoa_id, pct_nova, *_ in alocacoes_novas:
         pessoa = session.get(Pessoa, pessoa_id)
         if not pessoa:
             continue
@@ -50,12 +50,15 @@ def verificar_sobrealocacoes(session, tarefa_id, data_inicio, data_fim, alocacoe
 
 
 class AlocacaoRowWidget(QWidget):
-    """Uma linha de alocação: combo de pessoa + percentagem."""
+    """Uma linha de alocação: pessoa + tipo (%/horas) + valor + categoria + remover."""
 
-    def __init__(self, pessoas, pessoa_id=None, percentagem=0):
+    def __init__(self, pessoas, pessoa_id=None, percentagem=0, tipo="percentagem",
+                 horas=None, categoria="8h_uteis", ao_remover=None):
         super().__init__()
+        self._ao_remover = ao_remover
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 2, 0, 2)
 
         self.pessoa_combo = QComboBox()
         for p in pessoas:
@@ -65,16 +68,80 @@ class AlocacaoRowWidget(QWidget):
             if idx >= 0:
                 self.pessoa_combo.setCurrentIndex(idx)
 
-        self.percentagem_spin = QDoubleSpinBox()
-        self.percentagem_spin.setRange(0, 100)
-        self.percentagem_spin.setSuffix(" %")
-        self.percentagem_spin.setValue(float(percentagem))
+        self.tipo_combo = QComboBox()
+        self.tipo_combo.addItem("Percentagem", "percentagem")
+        self.tipo_combo.addItem("Horas", "horas")
+        idx_tipo = self.tipo_combo.findData(tipo)
+        if idx_tipo >= 0:
+            self.tipo_combo.setCurrentIndex(idx_tipo)
+
+        self.categoria_combo = QComboBox()
+        for chave, label in CATEGORIA_LABELS.items():
+            self.categoria_combo.addItem(label, chave)
+        idx_cat = self.categoria_combo.findData(categoria)
+        if idx_cat >= 0:
+            self.categoria_combo.setCurrentIndex(idx_cat)
+
+        self.valor_spin = QDoubleSpinBox()
+        self._configurar_valor_spin(percentagem, horas, tipo, categoria)
+
+        self.btn_remover = QPushButton("✕")
+        self.btn_remover.setFixedWidth(28)
+        self.btn_remover.setToolTip("Remover esta pessoa da tarefa")
+        self.btn_remover.clicked.connect(self._remover)
 
         layout.addWidget(self.pessoa_combo, 3)
-        layout.addWidget(self.percentagem_spin, 1)
+        layout.addWidget(self.tipo_combo, 2)
+        layout.addWidget(self.valor_spin, 2)
+        layout.addWidget(self.categoria_combo, 3)
+        layout.addWidget(self.btn_remover)
+
+        self.tipo_combo.currentIndexChanged.connect(self._ao_mudar_tipo_ou_categoria)
+        self.categoria_combo.currentIndexChanged.connect(self._ao_mudar_tipo_ou_categoria)
+
+    def _configurar_valor_spin(self, percentagem, horas, tipo, categoria):
+        if tipo == "horas":
+            base = horas_base_por_dia(categoria)
+            self.valor_spin.setRange(0, base)
+            self.valor_spin.setSuffix(" h")
+            self.valor_spin.setValue(float(horas) if horas is not None else percentagem_para_horas(percentagem, categoria))
+        else:
+            self.valor_spin.setRange(0, 100)
+            self.valor_spin.setSuffix(" %")
+            self.valor_spin.setValue(float(percentagem or 0))
+
+    def _ao_mudar_tipo_ou_categoria(self):
+        tipo = self.tipo_combo.currentData()
+        categoria = self.categoria_combo.currentData()
+        valor_atual = self.valor_spin.value()
+        if tipo == "horas":
+            base = horas_base_por_dia(categoria)
+            # se veio de percentagem, converte; se já estava em horas, mantém proporcional à nova categoria
+            self.valor_spin.setRange(0, base)
+            self.valor_spin.setSuffix(" h")
+        else:
+            self.valor_spin.setRange(0, 100)
+            self.valor_spin.setSuffix(" %")
+
+    def _remover(self):
+        if self._ao_remover:
+            self._ao_remover(self)
+        self.setParent(None)
+        self.deleteLater()
 
     def dados(self):
-        return self.pessoa_combo.currentData(), self.percentagem_spin.value()
+        """Retorna (pessoa_id, percentagem, tipo, horas, categoria)."""
+        pessoa_id = self.pessoa_combo.currentData()
+        tipo = self.tipo_combo.currentData()
+        categoria = self.categoria_combo.currentData()
+        valor = self.valor_spin.value()
+        if tipo == "horas":
+            horas = valor
+            percentagem = horas_para_percentagem(horas, categoria)
+        else:
+            horas = None
+            percentagem = valor
+        return pessoa_id, percentagem, tipo, horas, categoria
 
 
 class TarefaDialog(QDialog):
@@ -82,7 +149,7 @@ class TarefaDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Tarefa / Atividade")
         self.tarefa = tarefa
-        self.resize(480, 500)
+        self.resize(560, 560)
 
         session = get_session()
         try:
@@ -90,7 +157,12 @@ class TarefaDialog(QDialog):
             self.pessoas = session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome).all()
             alocacoes_existentes = []
             if tarefa:
-                alocacoes_existentes = [(a.pessoa_id, float(a.percentagem or 0)) for a in tarefa.alocacoes]
+                alocacoes_existentes = [
+                    (a.pessoa_id, float(a.percentagem or 0), a.tipo or "percentagem",
+                     float(a.horas) if a.horas is not None else None, a.categoria or "8h_uteis")
+                    for a in tarefa.alocacoes
+                ]
+            self._datas_projetos = {p.id: (p.data_inicio, p.data_fim) for p in self.projetos}
         finally:
             session.close()
 
@@ -110,6 +182,13 @@ class TarefaDialog(QDialog):
         self.data_fim = QDateEdit(calendarPopup=True)
         self.data_fim.setDate(pydate_to_qdate(tarefa.data_fim if tarefa else None))
 
+        # Ao escolher (ativamente) um projeto, as datas passam a ter por
+        # defeito as datas do projeto -- mas continuam editáveis à mão depois.
+        self.projeto_combo.activated.connect(self._preencher_datas_do_projeto)
+        if not tarefa and self.projetos:
+            # nova tarefa sem projeto ainda escolhido: não força datas
+            pass
+
         self.estado_combo = QComboBox()
         self.estado_combo.addItems(ESTADOS_TAREFA)
         if tarefa and tarefa.estado in ESTADOS_TAREFA:
@@ -126,6 +205,12 @@ class TarefaDialog(QDialog):
         self.alocacoes_container = QVBoxLayout()
         self.linhas_alocacao = []
 
+        cabecalho = QHBoxLayout()
+        for texto, largura in [("Pessoa", 3), ("Tipo", 2), ("Valor", 2), ("Categoria", 3), ("", 1)]:
+            lbl = QLabel(texto)
+            lbl.setStyleSheet("font-weight: bold; color: #555;")
+            cabecalho.addWidget(lbl, largura)
+
         btn_add = QPushButton("+ Adicionar pessoa")
         btn_add.clicked.connect(self._adicionar_linha_alocacao)
 
@@ -133,10 +218,18 @@ class TarefaDialog(QDialog):
         botoes.accepted.connect(self._validar_e_aceitar)
         botoes.rejected.connect(self.reject)
 
+        area_alocacoes = QFrame()
+        area_alocacoes.setLayout(self.alocacoes_container)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(area_alocacoes)
+        scroll.setMinimumHeight(160)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
-        layout.addWidget(QLabel("Pessoas alocadas e percentagem:"))
-        layout.addLayout(self.alocacoes_container)
+        layout.addWidget(QLabel("Pessoas alocadas:"))
+        layout.addLayout(cabecalho)
+        layout.addWidget(scroll)
         layout.addWidget(btn_add)
         layout.addWidget(botoes)
 
@@ -144,15 +237,30 @@ class TarefaDialog(QDialog):
             btn_add.setEnabled(False)
         else:
             if alocacoes_existentes:
-                for pessoa_id, pct in alocacoes_existentes:
-                    self._adicionar_linha_alocacao(pessoa_id, pct)
+                for pessoa_id, pct, tipo, horas, categoria in alocacoes_existentes:
+                    self._adicionar_linha_alocacao(pessoa_id, pct, tipo, horas, categoria)
             else:
                 self._adicionar_linha_alocacao()
 
-    def _adicionar_linha_alocacao(self, pessoa_id=None, percentagem=0):
-        linha = AlocacaoRowWidget(self.pessoas, pessoa_id, percentagem)
+    def _preencher_datas_do_projeto(self, _index=None):
+        projeto_id = self.projeto_combo.currentData()
+        datas = self._datas_projetos.get(projeto_id)
+        if datas and datas[0] and datas[1]:
+            self.data_inicio.setDate(pydate_to_qdate(datas[0]))
+            self.data_fim.setDate(pydate_to_qdate(datas[1]))
+
+    def _adicionar_linha_alocacao(self, pessoa_id=None, percentagem=0, tipo="percentagem",
+                                   horas=None, categoria="8h_uteis"):
+        linha = AlocacaoRowWidget(
+            self.pessoas, pessoa_id, percentagem, tipo, horas, categoria,
+            ao_remover=self._remover_linha_alocacao,
+        )
         self.alocacoes_container.addWidget(linha)
         self.linhas_alocacao.append(linha)
+
+    def _remover_linha_alocacao(self, linha):
+        if linha in self.linhas_alocacao:
+            self.linhas_alocacao.remove(linha)
 
     def _validar_e_aceitar(self):
         if self.data_fim.date() < self.data_inicio.date():
@@ -170,12 +278,12 @@ class TarefaDialog(QDialog):
         }
 
     def alocacoes(self):
-        """Retorna lista de (pessoa_id, percentagem), ignorando linhas sem pessoa."""
+        """Retorna lista de (pessoa_id, percentagem, tipo, horas, categoria), ignorando linhas sem pessoa."""
         resultado = []
         for linha in self.linhas_alocacao:
-            pessoa_id, pct = linha.dados()
+            pessoa_id, pct, tipo, horas, categoria = linha.dados()
             if pessoa_id is not None and pct > 0:
-                resultado.append((pessoa_id, pct))
+                resultado.append((pessoa_id, pct, tipo, horas, categoria))
         return resultado
 
 
@@ -248,8 +356,11 @@ class VistaTarefas(BaseCrudWidget):
                         session.delete(a)
                     session.flush()
 
-                for pessoa_id, pct in alocacoes:
-                    session.add(Alocacao(tarefa_id=tarefa.id, pessoa_id=pessoa_id, percentagem=pct))
+                for pessoa_id, pct, tipo, horas, categoria in alocacoes:
+                    session.add(Alocacao(
+                        tarefa_id=tarefa.id, pessoa_id=pessoa_id, percentagem=pct,
+                        tipo=tipo, horas=horas, categoria=categoria,
+                    ))
 
                 session.commit()
             finally:

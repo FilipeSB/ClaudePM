@@ -133,15 +133,28 @@ class Tarefa(Base):
 # ---------------------------------------------------------------------------
 # Alocacao (associativa Pessoa <-> Tarefa, com percentagem)
 # ---------------------------------------------------------------------------
+TIPOS_ALOCACAO = ["percentagem", "horas"]
+CATEGORIAS_ALOCACAO = ["8h_uteis", "24h_todos"]
+CATEGORIA_LABELS = {
+    "8h_uteis": "8 horas / dias úteis",
+    "24h_todos": "24 horas / todos os dias",
+}
+
+
 class Alocacao(Base):
     __tablename__ = "alocacao"
 
     id = Column(Integer, primary_key=True)
     pessoa_id = Column(Integer, ForeignKey("pessoa.id"))
     tarefa_id = Column(Integer, ForeignKey("tarefa.id"))
-    percentagem = Column(Numeric(5, 2), default=0)  # 0-100
+    percentagem = Column(Numeric(5, 2), default=0)  # 0-100, sempre calculado/normalizado
     data_inicio = Column(Date)
     data_fim = Column(Date)
+
+    # Novos campos: forma como o utilizador introduziu a alocação
+    tipo = Column(String(20), default="percentagem")       # "percentagem" ou "horas"
+    horas = Column(Numeric(5, 2))                            # preenchido se tipo == "horas"
+    categoria = Column(String(20), default="8h_uteis")       # "8h_uteis" ou "24h_todos"
 
     pessoa = relationship("Pessoa", back_populates="alocacoes")
     tarefa = relationship("Tarefa", back_populates="alocacoes")
