@@ -8,7 +8,7 @@
 ; Gera: Output/GestaoProjetos-Setup.exe
 
 #define MyAppName "Gestão de Pessoas e Projetos"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "A tua empresa"
 #define MyAppExeName "GestaoProjetos.exe"
 

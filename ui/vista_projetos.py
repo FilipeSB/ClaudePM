@@ -1,8 +1,9 @@
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit,
-    QDialogButtonBox, QVBoxLayout, QMessageBox
+    QDialogButtonBox, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QMessageBox
 )
 from PySide6.QtCore import QDate
+from datetime import date
 from database.db import get_session
 from database.models import Projeto, Cliente, ESTADOS_PROJETO
 from ui.base_crud import BaseCrudWidget
@@ -93,9 +94,33 @@ class VistaProjetos(BaseCrudWidget):
         self.colunas = ["ID", "Nome", "Cliente", "Início", "Fim", "Estado", "Custo Estimado (€)"]
         self.exportavel = True
         self.nome_exportacao = "projetos"
+        self._custo_ate_data = None  # None = sem filtro; definido antes do primeiro refresh()
         super().__init__("Projeto")
 
+        # --- controlo de "consultar custos até uma data" ---
+        controlo = QHBoxLayout()
+        self.check_custo_ate = QCheckBox("Ver custos apenas até uma data:")
+        self.data_custo_ate = QDateEdit(calendarPopup=True)
+        self.data_custo_ate.setDate(QDate.currentDate())
+        self.data_custo_ate.setEnabled(False)
+        controlo.addWidget(self.check_custo_ate)
+        controlo.addWidget(self.data_custo_ate)
+        controlo.addStretch()
+        self.layout().insertLayout(1, controlo)
+
+        self.check_custo_ate.toggled.connect(self._ao_alterar_filtro_custo)
+        self.data_custo_ate.dateChanged.connect(self._ao_alterar_filtro_custo)
+
+    def _ao_alterar_filtro_custo(self):
+        self.data_custo_ate.setEnabled(self.check_custo_ate.isChecked())
+        self._custo_ate_data = self.data_custo_ate.date().toPython() if self.check_custo_ate.isChecked() else None
+        self.refresh()
+
     def carregar_linhas(self):
+        ate_data = self._custo_ate_data
+        rotulo_coluna = f"Custo até {ate_data} (€)" if ate_data else "Custo Estimado (€)"
+        self.colunas = ["ID", "Nome", "Cliente", "Início", "Fim", "Estado", rotulo_coluna]
+
         session = get_session()
         try:
             projetos = session.query(Projeto).order_by(Projeto.data_inicio.desc()).all()
@@ -104,7 +129,7 @@ class VistaProjetos(BaseCrudWidget):
                     p.id, p.nome,
                     p.cliente.nome if p.cliente else "",
                     p.data_inicio, p.data_fim, p.estado,
-                    f"{custo_projeto(p):,.2f}",
+                    f"{custo_projeto(p, ate_data):,.2f}",
                 ])
                 for p in projetos
             ]

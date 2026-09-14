@@ -3,8 +3,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction
 
-from database.db import fazer_backup, nome_sugerido_backup, get_session, DB_PATH
+from database.db import fazer_backup, nome_sugerido_backup, restaurar_backup, get_session, DB_PATH
 from utils.importacao import gerar_template, importar_excel
+from utils.versao import VERSAO
 
 from ui.vista_clientes import VistaClientes
 from ui.vista_equipas import VistaEquipas
@@ -19,7 +20,7 @@ from ui.vista_alocacao import VistaAlocacao
 class JanelaPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gestão de Pessoas e Projetos")
+        self.setWindowTitle(f"Gestão de Pessoas e Projetos — v{VERSAO}")
         self.resize(1300, 780)
 
         self.tabs = QTabWidget()
@@ -66,6 +67,12 @@ class JanelaPrincipal(QMainWindow):
         acao_importar = QAction("Importar dados de Excel...", self)
         acao_importar.triggered.connect(self._importar_excel)
         menu_ficheiro.addAction(acao_importar)
+
+        menu_ficheiro.addSeparator()
+
+        acao_restaurar = QAction("Restaurar base de dados a partir de backup...", self)
+        acao_restaurar.triggered.connect(self._restaurar_backup)
+        menu_ficheiro.addAction(acao_restaurar)
 
     # ------------------------------------------------------------------
     def _fazer_backup(self):
@@ -134,6 +141,37 @@ class JanelaPrincipal(QMainWindow):
             QMessageBox.information(self, "Importação concluída", mensagem)
 
         self._atualizar_todas_as_vistas()
+
+    def _restaurar_backup(self):
+        origem, _ = QFileDialog.getOpenFileName(
+            self, "Selecionar ficheiro de backup a restaurar", "", "Base de dados (*.db)"
+        )
+        if not origem:
+            return
+
+        resp = QMessageBox.warning(
+            self, "Confirmar restauro",
+            "Isto vai SUBSTITUIR todos os dados atuais pelos do backup selecionado.\n\n"
+            "O estado atual será guardado automaticamente numa cópia de segurança "
+            "antes de o substituir, mas esta ação não deve ser feita de ânimo leve.\n\n"
+            "Tens a certeza que queres continuar?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if resp != QMessageBox.Yes:
+            return
+
+        try:
+            copia_seguranca = restaurar_backup(origem)
+        except Exception as exc:
+            QMessageBox.critical(self, "Erro ao restaurar", str(exc))
+            return
+
+        self._atualizar_todas_as_vistas()
+        QMessageBox.information(
+            self, "Restauro concluído",
+            f"Base de dados restaurada a partir de:\n{origem}\n\n"
+            f"O estado anterior foi guardado em:\n{copia_seguranca}"
+        )
 
     # ------------------------------------------------------------------
     def _atualizar_todas_as_vistas(self):

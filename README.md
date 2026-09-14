@@ -27,30 +27,34 @@ de exemplo — podes editá-los no separador "Perfis".
 ```
 gestao-projetos/
 ├── main.py                  # ponto de entrada
-├── build_exe.py              # gera o .exe standalone (PyInstaller)
+├── build_exe.py              # gera o .exe standalone (PyInstaller), sincroniza versão
+├── sync_versao.py            # sincroniza utils/versao.py -> version_info.txt / installer.iss
+├── version_info.txt          # metadados do .exe (gerado/atualizado por sync_versao.py)
 ├── installer.iss             # script Inno Setup -> gera o setup.exe
 ├── assets/
 │   └── icon.ico               # ícone da aplicação
 ├── .github/workflows/
 │   └── build.yml              # gera .exe + instalador automaticamente no GitHub
 ├── database/
-│   ├── models.py             # modelos (tabelas) SQLAlchemy
-│   └── db.py                 # ligação à BD SQLite + seed inicial
+│   ├── models.py             # modelos (tabelas) SQLAlchemy, inclui PerfilCustoHistorico
+│   └── db.py                 # ligação à BD SQLite + seed inicial + backup/restore
 ├── utils/
-│   ├── calculos.py           # cálculo de custo de projeto + conversão horas/percentagem
+│   ├── versao.py             # número de versão da aplicação (fonte única)
+│   ├── calculos.py           # cálculo de custo (com histórico de perfis) + conversão horas/percentagem
 │   ├── periodos.py           # navegação por período (semanal/mensal/anual)
 │   ├── importacao.py         # geração de template Excel + importação
 │   └── exportacao.py         # exportação Excel/PDF
 ├── ui/
 │   ├── base_crud.py          # widget genérico de listagem/formulário
-│   ├── janela_principal.py   # janela com separadores + menu Ficheiro
+│   ├── filtro_multi_selecao.py  # dropdown com checkboxes (filtro de estado no calendário)
+│   ├── janela_principal.py   # janela com separadores + menu Ficheiro (backup/restore/importação)
 │   ├── vista_clientes.py
 │   ├── vista_equipas.py
-│   ├── vista_perfis.py
+│   ├── vista_perfis.py       # inclui histórico de custos por perfil
 │   ├── vista_pessoas.py
-│   ├── vista_projetos.py
+│   ├── vista_projetos.py     # inclui filtro "custos até uma data"
 │   ├── vista_tarefas.py      # datas por defeito do projeto, alocação %/horas
-│   ├── vista_calendario.py   # grelha Cliente/Projeto/Tarefa/Deadline + dias
+│   ├── vista_calendario.py   # grelha por pessoa, cores próprias, filtro de estado multi-seleção
 │   └── vista_alocacao.py     # % de alocação por pessoa, com filtros de período
 └── requirements.txt
 ```
@@ -82,21 +86,33 @@ gestao-projetos/
     (trabalho normal) ou *24 horas / todos os dias* (ex: equipamento ou
     serviço contínuo). Ao introduzir horas, a percentagem é calculada
     automaticamente a partir da categoria escolhida.
-- **Calendário** em formato de grelha (Cliente | Projeto | Tarefa | Deadline
-  + colunas de dias/meses), com navegação por período **Semanal / Mensal /
-  Anual** (anterior/seguinte/hoje) e filtros por cliente, projeto, pessoa e
-  estado. Cada célula mostra uma barra colorida com a percentagem de
-  alocação da tarefa nesse dia (ou mês, na vista anual):
-  - cinzento = sem alocação nesse período
-  - amarelo = alocação parcial (<100%)
-  - verde = 100%
-  - vermelho = sobre-alocado (>100%)
-- **Alocação**: a mesma lógica de percentagem por pessoa, agora com
-  navegação por período (Semanal/Mensal/Anual) e filtros adicionais por
-  Cliente, Projeto e Tarefa (em cascata: escolher um cliente filtra os
-  projetos disponíveis, e escolher um projeto filtra as tarefas).
+- **Calendário** em formato de grelha, com navegação por período **Semanal
+  / Mensal / Anual** (anterior/seguinte/hoje). Uma linha por pessoa alocada
+  a cada tarefa (colunas: Cliente | Projeto | Atividade | Pessoa | %
+  Alocação | Estado da Atividade + colunas de dias/meses), com uma barra
+  colorida por dia — **cada pessoa tem uma cor própria e consistente**,
+  para se distinguir facilmente quem está alocado a quê. Filtros por
+  cliente, projeto e pessoa, e filtro de **estado com seleção múltipla**
+  (podes escolher vários estados ao mesmo tempo).
+- **Alocação**: percentagem por pessoa, com navegação por período
+  (Semanal/Mensal/Anual) e filtros adicionais por Cliente, Projeto e Tarefa
+  (em cascata: escolher um cliente filtra os projetos disponíveis, e
+  escolher um projeto filtra as tarefas).
+- **Histórico de custos dos Perfis**: sempre que alteras o custo/hora ou
+  custo/dia de um perfil, a data dessa alteração fica registada (botão
+  "Ver histórico de custos" na vista de Perfis). Os custos de projetos são
+  calculados usando o custo que estava em vigor na data de início de cada
+  tarefa — não o custo atual. Na vista de Projetos podes ainda marcar "Ver
+  custos apenas até uma data" para consultar o custo acumulado até esse
+  momento (só conta tarefas já iniciadas nessa data).
+- **Restauro da base de dados**: menu *Ficheiro > Restaurar base de dados a
+  partir de backup...* — substitui os dados atuais pelos de um backup
+  escolhido (com confirmação explícita, e guardando automaticamente uma
+  cópia de segurança do estado atual antes de o fazer).
 - Exportação para Excel e PDF em todas as vistas de listagem, incluindo
   Calendário e Alocação.
+- **Número de versão** visível no título da janela (ex: "v1.2.0"), gerido
+  centralmente em `utils/versao.py` — ver secção *Versionamento* abaixo.
 
 
 ## Funcionalidades adicionadas (2ª fase)
@@ -201,6 +217,30 @@ O que **não** está resolvido, por implicar custos:
   https://www.microsoft.com/en-us/wdsi/filesubmission — normalmente é
   corrigido em 24-48h e ajuda a "reputação" do ficheiro para todos os
   utilizadores.
+
+## Versionamento
+
+A versão da aplicação segue o esquema semântico `MAJOR.MINOR.PATCH`:
+- **MAJOR**: mudanças estruturais grandes (ex: redesenho de uma vista,
+  alterações que quebram compatibilidade com instalações antigas).
+- **MINOR**: novas funcionalidades.
+- **PATCH**: correções e pequenos ajustes, sem funcionalidade nova.
+
+A versão está definida num único sítio: `utils/versao.py` (variável
+`VERSAO`), junto com um histórico resumido do que mudou em cada versão.
+Isso é a única coisa que precisas de atualizar manualmente a cada ronda
+de alterações — tudo o resto sincroniza-se sozinho:
+
+- O **título da janela** mostra sempre a versão atual (ex: "Gestão de
+  Pessoas e Projetos — v1.2.0"), lido diretamente de `utils/versao.py`.
+- O `build_exe.py` chama `sync_versao.py` automaticamente antes de gerar
+  o executável, que atualiza `version_info.txt` (metadados do `.exe`) e
+  `installer.iss` (versão do instalador) para o mesmo valor.
+
+Ou seja: quando eu fizer alterações, atualizo a `VERSAO` em
+`utils/versao.py` de acordo com o tipo de mudança, e essa versão aparece
+automaticamente na aplicação e no instalador gerado — não é preciso editar
+mais nenhum ficheiro à mão.
 
 ## Próximos passos sugeridos
 

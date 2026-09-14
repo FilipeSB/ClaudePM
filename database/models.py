@@ -57,9 +57,33 @@ class Perfil(Base):
     data_atualizacao = Column(Date, default=date.today)
 
     pessoas = relationship("Pessoa", back_populates="perfil")
+    historico_custos = relationship(
+        "PerfilCustoHistorico", back_populates="perfil",
+        cascade="all, delete-orphan", order_by="PerfilCustoHistorico.data_alteracao",
+    )
 
     def __repr__(self):
         return f"{self.codigo} - {self.designacao}"
+
+
+# ---------------------------------------------------------------------------
+# Histórico de custos de um Perfil (cada alteração ao custo fica registada
+# com a data em que passou a ser válida, para que o custo de projetos
+# antigos continue a ser calculado com o valor em vigor nessa altura).
+# ---------------------------------------------------------------------------
+class PerfilCustoHistorico(Base):
+    __tablename__ = "perfil_custo_historico"
+
+    id = Column(Integer, primary_key=True)
+    perfil_id = Column(Integer, ForeignKey("perfil.id"))
+    custo_hora = Column(Numeric(10, 2), default=0)
+    custo_dia = Column(Numeric(10, 2), default=0)
+    data_alteracao = Column(Date, default=date.today)
+
+    perfil = relationship("Perfil", back_populates="historico_custos")
+
+    def __repr__(self):
+        return f"{self.perfil.codigo if self.perfil else '?'} @ {self.data_alteracao}: {self.custo_dia}/dia"
 
 
 # ---------------------------------------------------------------------------

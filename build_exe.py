@@ -19,6 +19,10 @@ bastante a probabilidade de o Windows/antivírus assinalarem falsamente
 o executável como suspeito.
 """
 import PyInstaller.__main__
+from sync_versao import sincronizar_version_info, sincronizar_installer_iss
+
+sincronizar_version_info()
+sincronizar_installer_iss()
 
 PyInstaller.__main__.run([
     "main.py",

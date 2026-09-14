@@ -4,10 +4,10 @@ Ligação à base de dados SQLite e utilitários de inicialização, migração 
 import os
 import sys
 import shutil
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
-from database.models import Base, Perfil
+from database.models import Base, Perfil, PerfilCustoHistorico
 
 
 def _pasta_dados_utilizador() -> str:
@@ -76,11 +76,37 @@ def init_db():
     try:
         if session.query(Perfil).count() == 0:
             for codigo, designacao, custo_hora in PERFIS_DEFAULT:
-                session.add(Perfil(
+                perfil = Perfil(
                     codigo=codigo,
                     designacao=designacao,
                     custo_hora=custo_hora,
                     custo_dia=custo_hora * 8,
+                )
+                session.add(perfil)
+                session.flush()
+                session.add(PerfilCustoHistorico(
+                    perfil_id=perfil.id,
+                    custo_hora=perfil.custo_hora,
+                    custo_dia=perfil.custo_dia,
+                    data_alteracao=perfil.data_atualizacao,
+                ))
+            session.commit()
+
+        # Perfis já existentes (de uma versão anterior) que ainda não tenham
+        # nenhum registo de histórico: cria-se um ponto de partida com o
+        # custo atual, para que as consultas de custo por data funcionem.
+        perfis_sem_historico = (
+            session.query(Perfil)
+            .filter(~Perfil.historico_custos.any())
+            .all()
+        )
+        if perfis_sem_historico:
+            for perfil in perfis_sem_historico:
+                session.add(PerfilCustoHistorico(
+                    perfil_id=perfil.id,
+                    custo_hora=perfil.custo_hora,
+                    custo_dia=perfil.custo_dia,
+                    data_alteracao=perfil.data_atualizacao or date.today(),
                 ))
             session.commit()
     finally:
@@ -101,3 +127,40 @@ def fazer_backup(destino: str) -> str:
 def nome_sugerido_backup() -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"backup_gestao_projetos_{timestamp}.db"
+
+
+def validar_ficheiro_sqlite(caminho: str) -> bool:
+    """Confirma que o ficheiro parece ser mesmo uma base de dados SQLite válida."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{caminho}?mode=ro", uri=True)
+        conn.execute("SELECT name FROM sqlite_master LIMIT 1")
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def restaurar_backup(origem: str) -> str:
+    """
+    Substitui a base de dados atual pelo ficheiro 'origem' (um backup
+    anteriormente criado). Antes de substituir, guarda uma cópia de
+    segurança do estado atual (para o caso de o restauro ser enganado).
+    Devolve o caminho dessa cópia de segurança.
+    """
+    if not validar_ficheiro_sqlite(origem):
+        raise ValueError("O ficheiro selecionado não parece ser uma base de dados válida.")
+
+    ENGINE.dispose()
+
+    seguranca = os.path.join(PASTA_DADOS, f"antes_restauro_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+    if os.path.exists(DB_PATH):
+        shutil.copy2(DB_PATH, seguranca)
+
+    shutil.copy2(origem, DB_PATH)
+
+    # Garante que a BD restaurada fica com o esquema atualizado (caso seja
+    # um backup antigo) e que os perfis por defeito existem se faltarem.
+    init_db()
+
+    return seguranca

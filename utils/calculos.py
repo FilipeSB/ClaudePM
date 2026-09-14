@@ -2,7 +2,7 @@
 Utilitários de cálculo de custos e conversão horas <-> percentagem,
 partilhados entre vistas.
 """
-from datetime import timedelta
+from datetime import timedelta, date as date_cls
 
 
 def dias_uteis(inicio, fim):
@@ -54,8 +54,33 @@ def dias_tarefa(tarefa, categoria: str = "8h_uteis"):
     return dias_uteis(tarefa.data_inicio, tarefa.data_fim)
 
 
+def custo_perfil_na_data(perfil, data_referencia=None):
+    """
+    Devolve (custo_hora, custo_dia) do perfil, válidos à data 'data_referencia'
+    (usa o registo de histórico mais recente cuja data_alteracao <= data_referencia).
+    Se não houver nenhum registo anterior a essa data, usa o mais antigo disponível.
+    Sem histórico algum, cai para os valores atuais do perfil.
+    """
+    if not perfil:
+        return 0.0, 0.0
+    if data_referencia is None:
+        data_referencia = date_cls.today()
+
+    historico = sorted(perfil.historico_custos, key=lambda h: h.data_alteracao)
+    if not historico:
+        return float(perfil.custo_hora or 0), float(perfil.custo_dia or 0)
+
+    candidatos = [h for h in historico if h.data_alteracao <= data_referencia]
+    escolhido = candidatos[-1] if candidatos else historico[0]
+    return float(escolhido.custo_hora or 0), float(escolhido.custo_dia or 0)
+
+
 def custo_alocacao(alocacao):
-    """Custo de uma alocação = % alocação * custo/dia do perfil da pessoa * dias 'de trabalho' da tarefa."""
+    """
+    Custo de uma alocação = % alocação * custo/dia do perfil (válido à DATA
+    DE INÍCIO DA TAREFA, isto é, o custo em vigor quando o trabalho foi/será
+    realizado) * dias 'de trabalho' da tarefa.
+    """
     tarefa = alocacao.tarefa
     pessoa = alocacao.pessoa
     if not tarefa or not pessoa or not pessoa.perfil:
@@ -63,7 +88,7 @@ def custo_alocacao(alocacao):
     categoria = alocacao.categoria or "8h_uteis"
     dias = dias_tarefa(tarefa, categoria)
     pct = float(alocacao.percentagem or 0) / 100
-    custo_dia = float(pessoa.perfil.custo_dia or 0)
+    _, custo_dia = custo_perfil_na_data(pessoa.perfil, tarefa.data_inicio)
     return dias * pct * custo_dia
 
 
@@ -71,5 +96,14 @@ def custo_tarefa(tarefa):
     return sum(custo_alocacao(a) for a in tarefa.alocacoes)
 
 
-def custo_projeto(projeto):
-    return sum(custo_tarefa(t) for t in projeto.tarefas)
+def custo_projeto(projeto, ate_data=None):
+    """
+    Custo total do projeto. Se 'ate_data' for indicada, só soma as tarefas
+    que já tinham começado nessa data (data_inicio <= ate_data) -- ou seja,
+    "quanto já foi/terá sido gasto até esta data", usando sempre o custo do
+    perfil válido na data de início de cada tarefa.
+    """
+    tarefas = projeto.tarefas
+    if ate_data is not None:
+        tarefas = [t for t in tarefas if t.data_inicio and t.data_inicio <= ate_data]
+    return sum(custo_tarefa(t) for t in tarefas)
