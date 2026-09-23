@@ -57,25 +57,38 @@ class VistaEquipas(BaseCrudWidget):
             dados = dialog.dados()
             if not dados["nome"]:
                 return
-            session = get_session()
-            try:
-                if obj is None:
-                    session.add(Equipa(**dados))
-                else:
-                    equipa = session.get(Equipa, obj.id)
-                    for k, v in dados.items():
-                        setattr(equipa, k, v)
-                session.commit()
-            finally:
-                session.close()
-            self.refresh()
+
+            def gravar():
+                session = get_session()
+                try:
+                    if obj is None:
+                        session.add(Equipa(**dados))
+                    else:
+                        equipa = session.get(Equipa, obj.id)
+                        for k, v in dados.items():
+                            setattr(equipa, k, v)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+
+            if self.executar_com_seguranca(gravar, "Erro ao gravar equipa"):
+                self.refresh()
 
     def eliminar(self, obj):
-        session = get_session()
-        try:
-            equipa = session.get(Equipa, obj.id)
-            if equipa:
-                session.delete(equipa)
-                session.commit()
-        finally:
-            session.close()
+        def apagar():
+            session = get_session()
+            try:
+                equipa = session.get(Equipa, obj.id)
+                if equipa:
+                    session.delete(equipa)
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        self.executar_com_seguranca(apagar, "Erro ao eliminar equipa")

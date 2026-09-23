@@ -96,25 +96,38 @@ class VistaPessoas(BaseCrudWidget):
             dados = dialog.dados()
             if not dados["nome"]:
                 return
-            session = get_session()
-            try:
-                if obj is None:
-                    session.add(Pessoa(**dados))
-                else:
-                    pessoa = session.get(Pessoa, obj.id)
-                    for k, v in dados.items():
-                        setattr(pessoa, k, v)
-                session.commit()
-            finally:
-                session.close()
-            self.refresh()
+
+            def gravar():
+                session = get_session()
+                try:
+                    if obj is None:
+                        session.add(Pessoa(**dados))
+                    else:
+                        pessoa = session.get(Pessoa, obj.id)
+                        for k, v in dados.items():
+                            setattr(pessoa, k, v)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+
+            if self.executar_com_seguranca(gravar, "Erro ao gravar pessoa"):
+                self.refresh()
 
     def eliminar(self, obj):
-        session = get_session()
-        try:
-            pessoa = session.get(Pessoa, obj.id)
-            if pessoa:
-                session.delete(pessoa)
-                session.commit()
-        finally:
-            session.close()
+        def apagar():
+            session = get_session()
+            try:
+                pessoa = session.get(Pessoa, obj.id)
+                if pessoa:
+                    session.delete(pessoa)
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        self.executar_com_seguranca(apagar, "Erro ao eliminar pessoa")

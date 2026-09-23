@@ -3,8 +3,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QMessageBox, QPushButton, QDoubleSpinBox,
     QWidget, QLabel, QScrollArea, QFrame
 )
-from database.db import get_session
-from database.models import Tarefa, Projeto, Pessoa, Alocacao, ESTADOS_TAREFA, CATEGORIA_LABELS
+from PySide6.QtCore import QTimer
+from database.db import get_session, listar_estados_tarefa
+from database.models import Tarefa, Projeto, Pessoa, Alocacao, CATEGORIA_LABELS
 from ui.base_crud import BaseCrudWidget
 from ui.vista_projetos import qdate_to_pydate, pydate_to_qdate
 from utils.calculos import horas_para_percentagem, percentagem_para_horas, horas_base_por_dia
@@ -124,6 +125,15 @@ class AlocacaoRowWidget(QWidget):
             self.valor_spin.setSuffix(" %")
 
     def _remover(self):
+        # A remoção é feita de forma diferida (QTimer.singleShot) em vez de
+        # imediata, porque destruir este próprio widget de dentro do
+        # handler de clique do seu botão-filho, de forma síncrona, é um
+        # padrão instável em Qt e foi identificado como causa provável de
+        # fechos inesperados da aplicação. Diferir para a próxima iteração
+        # do event loop evita esse problema.
+        QTimer.singleShot(0, self._remover_efetivo)
+
+    def _remover_efetivo(self):
         if self._ao_remover:
             self._ao_remover(self)
         self.setParent(None)
@@ -155,6 +165,7 @@ class TarefaDialog(QDialog):
         try:
             self.projetos = session.query(Projeto).order_by(Projeto.nome).all()
             self.pessoas = session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome).all()
+            self.estados_disponiveis = listar_estados_tarefa(session)
             alocacoes_existentes = []
             if tarefa:
                 alocacoes_existentes = [
@@ -190,8 +201,10 @@ class TarefaDialog(QDialog):
             pass
 
         self.estado_combo = QComboBox()
-        self.estado_combo.addItems(ESTADOS_TAREFA)
-        if tarefa and tarefa.estado in ESTADOS_TAREFA:
+        self.estado_combo.addItems(self.estados_disponiveis)
+        if tarefa and tarefa.estado:
+            if tarefa.estado not in self.estados_disponiveis:
+                self.estado_combo.addItem(tarefa.estado)
             self.estado_combo.setCurrentText(tarefa.estado)
 
         form = QFormLayout()
@@ -318,61 +331,74 @@ class VistaTarefas(BaseCrudWidget):
                 return
             alocacoes = dialog.alocacoes()
 
-            session = get_session()
             try:
-                conflitos = verificar_sobrealocacoes(
-                    session,
-                    tarefa_id=obj.id if obj else None,
-                    data_inicio=dados["data_inicio"],
-                    data_fim=dados["data_fim"],
-                    alocacoes_novas=alocacoes,
-                )
-            finally:
-                session.close()
+                session = get_session()
+                try:
+                    conflitos = verificar_sobrealocacoes(
+                        session,
+                        tarefa_id=obj.id if obj else None,
+                        data_inicio=dados["data_inicio"],
+                        data_fim=dados["data_fim"],
+                        alocacoes_novas=alocacoes,
+                    )
+                finally:
+                    session.close()
 
-            if conflitos:
-                resp = QMessageBox.warning(
-                    self, "Sobre-alocação detetada",
-                    "As seguintes pessoas ficariam alocadas acima de 100% em período sobreposto:\n\n"
-                    + "\n".join(conflitos)
-                    + "\n\nQueres gravar mesmo assim?",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-                )
-                if resp != QMessageBox.Yes:
-                    return
+                if conflitos:
+                    resp = QMessageBox.warning(
+                        self, "Sobre-alocação detetada",
+                        "As seguintes pessoas ficariam alocadas acima de 100% em período sobreposto:\n\n"
+                        + "\n".join(conflitos)
+                        + "\n\nQueres gravar mesmo assim?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                    )
+                    if resp != QMessageBox.Yes:
+                        return
 
-            session = get_session()
-            try:
-                if obj is None:
-                    tarefa = Tarefa(**dados)
-                    session.add(tarefa)
-                    session.flush()
-                else:
-                    tarefa = session.get(Tarefa, obj.id)
-                    for k, v in dados.items():
-                        setattr(tarefa, k, v)
-                    # remove alocações antigas para recriar
-                    for a in list(tarefa.alocacoes):
-                        session.delete(a)
-                    session.flush()
+                session = get_session()
+                try:
+                    if obj is None:
+                        tarefa = Tarefa(**dados)
+                        session.add(tarefa)
+                        session.flush()
+                    else:
+                        tarefa = session.get(Tarefa, obj.id)
+                        for k, v in dados.items():
+                            setattr(tarefa, k, v)
+                        # remove alocações antigas para recriar
+                        for a in list(tarefa.alocacoes):
+                            session.delete(a)
+                        session.flush()
 
-                for pessoa_id, pct, tipo, horas, categoria in alocacoes:
-                    session.add(Alocacao(
-                        tarefa_id=tarefa.id, pessoa_id=pessoa_id, percentagem=pct,
-                        tipo=tipo, horas=horas, categoria=categoria,
-                    ))
+                    for pessoa_id, pct, tipo, horas, categoria in alocacoes:
+                        session.add(Alocacao(
+                            tarefa_id=tarefa.id, pessoa_id=pessoa_id, percentagem=pct,
+                            tipo=tipo, horas=horas, categoria=categoria,
+                        ))
 
-                session.commit()
-            finally:
-                session.close()
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+            except Exception as exc:
+                QMessageBox.critical(self, "Erro ao gravar tarefa", f"Não foi possível gravar:\n\n{exc}")
+                return
             self.refresh()
 
     def eliminar(self, obj):
-        session = get_session()
         try:
-            tarefa = session.get(Tarefa, obj.id)
-            if tarefa:
-                session.delete(tarefa)
-                session.commit()
-        finally:
-            session.close()
+            session = get_session()
+            try:
+                tarefa = session.get(Tarefa, obj.id)
+                if tarefa:
+                    session.delete(tarefa)
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception as exc:
+            QMessageBox.critical(self, "Erro ao eliminar", f"Não foi possível eliminar:\n\n{exc}")

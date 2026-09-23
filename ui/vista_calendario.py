@@ -6,8 +6,8 @@ from PySide6.QtWidgets import (
     QProgressBar, QFileDialog, QMessageBox
 )
 
-from database.db import get_session
-from database.models import Tarefa, Projeto, Cliente, Pessoa, ESTADOS_TAREFA
+from database.db import get_session, listar_estados_tarefa
+from database.models import Tarefa, Projeto, Cliente, Pessoa
 from utils.periodos import (
     PERIODOS, intervalo_periodo, periodo_seguinte, periodo_anterior,
     descricao_periodo, dias_do_periodo, meses_do_ano,
@@ -105,9 +105,6 @@ class VistaCalendario(QWidget):
         self.filtro_cliente = QComboBox()
         self.filtro_projeto = QComboBox()
         self.filtro_pessoa = QComboBox()
-        self.filtro_estado = FiltroMultiSelecao(
-            [(e, e) for e in ESTADOS_TAREFA], rotulo_todos="Todos os estados"
-        )
 
         for label, combo in [
             ("Cliente", self.filtro_cliente), ("Projeto", self.filtro_projeto),
@@ -118,10 +115,10 @@ class VistaCalendario(QWidget):
             bloco.addWidget(combo)
             filtros_form.addLayout(bloco)
 
-        bloco_estado = QVBoxLayout()
-        bloco_estado.addWidget(QLabel("Estado"))
-        bloco_estado.addWidget(self.filtro_estado)
-        filtros_form.addLayout(bloco_estado)
+        self.bloco_estado = QVBoxLayout()
+        self.bloco_estado.addWidget(QLabel("Estado da Atividade"))
+        self.filtro_estado = None  # construído em _reconstruir_filtro_estado()
+        filtros_form.addLayout(self.bloco_estado)
 
         filtros_box.setLayout(filtros_form)
         layout.addWidget(filtros_box)
@@ -139,12 +136,43 @@ class VistaCalendario(QWidget):
         self.btn_hoje.clicked.connect(self._ir_hoje)
         for combo in (self.filtro_cliente, self.filtro_projeto, self.filtro_pessoa):
             combo.currentIndexChanged.connect(self._atualizar)
-        self.filtro_estado.alteracao.connect(self._atualizar)
         self.btn_exportar_excel.clicked.connect(self._exportar_excel)
         self.btn_exportar_pdf.clicked.connect(self._exportar_pdf)
 
+        self._reconstruir_filtro_estado()
         self._popular_filtros()
         self._atualizar()
+
+    # ------------------------------------------------------------------
+    def _reconstruir_filtro_estado(self):
+        """
+        Reconstrói o filtro de Estado da Atividade a partir da lista atual
+        de estados configurados (que pode mudar via menu Configurações),
+        preservando a seleção anterior sempre que possível.
+        """
+        selecao_anterior = None
+        valores_anteriores = set()
+        if self.filtro_estado is not None:
+            valores_anteriores = {v for v, _ in self.filtro_estado._checkboxes}
+            selecao_anterior = set(self.filtro_estado.valores_selecionados())
+            self.bloco_estado.removeWidget(self.filtro_estado)
+            self.filtro_estado.deleteLater()
+
+        session = get_session()
+        try:
+            estados = listar_estados_tarefa(session)
+        finally:
+            session.close()
+
+        self.filtro_estado = FiltroMultiSelecao([(e, e) for e in estados], rotulo_todos="Todos os estados")
+        if selecao_anterior is not None:
+            for valor, cb in self.filtro_estado._checkboxes:
+                # Estados que já existiam mantêm a seleção anterior; um
+                # estado novo (recém-criado na gestão de estados) começa
+                # sempre selecionado, para não ficar escondido por defeito.
+                cb.setChecked(valor in selecao_anterior if valor in valores_anteriores else True)
+        self.filtro_estado.alteracao.connect(self._atualizar)
+        self.bloco_estado.addWidget(self.filtro_estado)
 
     # ------------------------------------------------------------------
     def _popular_filtros(self):
@@ -171,6 +199,7 @@ class VistaCalendario(QWidget):
 
     def refresh_filtros(self):
         """Chamar quando dados de outras vistas mudarem (ex: novo cliente/projeto)."""
+        self._reconstruir_filtro_estado()
         self._popular_filtros()
         self._atualizar()
 

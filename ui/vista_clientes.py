@@ -60,25 +60,38 @@ class VistaClientes(BaseCrudWidget):
             dados = dialog.dados()
             if not dados["nome"]:
                 return
-            session = get_session()
-            try:
-                if obj is None:
-                    session.add(Cliente(**dados))
-                else:
-                    cliente = session.get(Cliente, obj.id)
-                    for k, v in dados.items():
-                        setattr(cliente, k, v)
-                session.commit()
-            finally:
-                session.close()
-            self.refresh()
+
+            def gravar():
+                session = get_session()
+                try:
+                    if obj is None:
+                        session.add(Cliente(**dados))
+                    else:
+                        cliente = session.get(Cliente, obj.id)
+                        for k, v in dados.items():
+                            setattr(cliente, k, v)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+
+            if self.executar_com_seguranca(gravar, "Erro ao gravar cliente"):
+                self.refresh()
 
     def eliminar(self, obj):
-        session = get_session()
-        try:
-            cliente = session.get(Cliente, obj.id)
-            if cliente:
-                session.delete(cliente)
-                session.commit()
-        finally:
-            session.close()
+        def apagar():
+            session = get_session()
+            try:
+                cliente = session.get(Cliente, obj.id)
+                if cliente:
+                    session.delete(cliente)
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        self.executar_com_seguranca(apagar, "Erro ao eliminar cliente")

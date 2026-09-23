@@ -6,10 +6,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor
 
-from database.db import get_session
+from database.db import get_session, listar_estados_tarefa
 from database.models import Pessoa, Tarefa, Projeto, Cliente
 from utils.periodos import PERIODOS, intervalo_periodo, periodo_seguinte, periodo_anterior, descricao_periodo
 from utils.exportacao import exportar_excel, exportar_pdf
+from ui.filtro_multi_selecao import FiltroMultiSelecao
 
 
 def _sobrepoe(inicio1, fim1, inicio2, fim2):
@@ -21,13 +22,15 @@ def _sobrepoe(inicio1, fim1, inicio2, fim2):
 class VistaAlocacao(QWidget):
     """
     Percentagem de alocação de cada pessoa, agregada num período (Semanal /
-    Mensal / Anual, navegável), com filtros adicionais por Cliente, Projeto
-    e Tarefa. Assinala visualmente sobre-alocação (>100%).
+    Mensal / Anual, navegável), com filtros adicionais por Cliente, Projeto,
+    Tarefa e Estado da Tarefa (seleção múltipla). Assinala visualmente
+    sobre-alocação (>100%).
     """
 
     def __init__(self):
         super().__init__()
         self.referencia = date.today()
+        self.filtro_estado = None  # construído em _reconstruir_filtro_estado()
         layout = QVBoxLayout(self)
 
         # ---------------- Navegação de período ----------------
@@ -73,6 +76,10 @@ class VistaAlocacao(QWidget):
             bloco.addWidget(combo)
             filtros_layout.addLayout(bloco)
 
+        self.bloco_estado = QVBoxLayout()
+        self.bloco_estado.addWidget(QLabel("Estado da Tarefa"))
+        filtros_layout.addLayout(self.bloco_estado)
+
         filtros_box.setLayout(filtros_layout)
         layout.addWidget(filtros_box)
 
@@ -96,10 +103,34 @@ class VistaAlocacao(QWidget):
         btn_excel.clicked.connect(self._exportar_excel)
         btn_pdf.clicked.connect(self._exportar_pdf)
 
+        self._reconstruir_filtro_estado()
         self._popular_filtros()
         self.refresh()
 
     # ------------------------------------------------------------------
+    def _reconstruir_filtro_estado(self):
+        """Reconstrói o filtro de Estado da Tarefa a partir da lista atual de estados configurados."""
+        selecao_anterior = None
+        valores_anteriores = set()
+        if self.filtro_estado is not None:
+            valores_anteriores = {v for v, _ in self.filtro_estado._checkboxes}
+            selecao_anterior = set(self.filtro_estado.valores_selecionados())
+            self.bloco_estado.removeWidget(self.filtro_estado)
+            self.filtro_estado.deleteLater()
+
+        session = get_session()
+        try:
+            estados = listar_estados_tarefa(session)
+        finally:
+            session.close()
+
+        self.filtro_estado = FiltroMultiSelecao([(e, e) for e in estados], rotulo_todos="Todos os estados")
+        if selecao_anterior is not None:
+            for valor, cb in self.filtro_estado._checkboxes:
+                cb.setChecked(valor in selecao_anterior if valor in valores_anteriores else True)
+        self.filtro_estado.alteracao.connect(self.refresh)
+        self.bloco_estado.addWidget(self.filtro_estado)
+
     def _popular_filtros(self, manter_projeto=False, manter_tarefa=False):
         session = get_session()
         try:
@@ -147,6 +178,7 @@ class VistaAlocacao(QWidget):
         self.refresh()
 
     def refresh_filtros(self):
+        self._reconstruir_filtro_estado()
         self._popular_filtros(manter_projeto=True, manter_tarefa=True)
         self.refresh()
 
@@ -172,6 +204,8 @@ class VistaAlocacao(QWidget):
         cliente_id = self.filtro_cliente.currentData()
         projeto_id = self.filtro_projeto.currentData()
         tarefa_id = self.filtro_tarefa.currentData()
+        estados_selecionados = self.filtro_estado.valores_selecionados()
+        filtrar_estado = self.filtro_estado.filtro_ativo()
 
         session = get_session()
         try:
@@ -186,6 +220,8 @@ class VistaAlocacao(QWidget):
                     if not t or not t.data_inicio or not t.data_fim:
                         continue
                     if not _sobrepoe(periodo_ini, periodo_fim, t.data_inicio, t.data_fim):
+                        continue
+                    if filtrar_estado and t.estado not in estados_selecionados:
                         continue
                     if tarefa_id and t.id != tarefa_id:
                         continue

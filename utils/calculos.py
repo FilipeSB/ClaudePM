@@ -66,7 +66,7 @@ def custo_perfil_na_data(perfil, data_referencia=None):
     if data_referencia is None:
         data_referencia = date_cls.today()
 
-    historico = sorted(perfil.historico_custos, key=lambda h: h.data_alteracao)
+    historico = sorted(perfil.historico_custos, key=lambda h: (h.data_alteracao, h.id))
     if not historico:
         return float(perfil.custo_hora or 0), float(perfil.custo_dia or 0)
 

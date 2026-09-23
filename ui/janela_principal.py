@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction
 
 from database.db import fazer_backup, nome_sugerido_backup, restaurar_backup, get_session, DB_PATH
-from utils.importacao import gerar_template, importar_excel
+from database.models import EstadoProjeto, EstadoTarefa, Projeto, Tarefa
+from utils.importacao import gerar_template, importar_excel, exportar_dados_atuais
 from utils.versao import VERSAO
 
 from ui.vista_clientes import VistaClientes
@@ -15,6 +16,7 @@ from ui.vista_projetos import VistaProjetos
 from ui.vista_tarefas import VistaTarefas
 from ui.vista_calendario import VistaCalendario
 from ui.vista_alocacao import VistaAlocacao
+from ui.gerir_estados_dialog import GerirEstadosDialog
 
 
 class JanelaPrincipal(QMainWindow):
@@ -37,10 +39,10 @@ class JanelaPrincipal(QMainWindow):
 
         self.tabs.addTab(self.vista_clientes, "Clientes")
         self.tabs.addTab(self.vista_equipas, "Equipas")
-        self.tabs.addTab(self.vista_perfis, "Perfis (CC01-CC07)")
+        self.tabs.addTab(self.vista_perfis, "Perfis")
         self.tabs.addTab(self.vista_pessoas, "Pessoas")
         self.tabs.addTab(self.vista_projetos, "Projetos")
-        self.tabs.addTab(self.vista_tarefas, "Tarefas / Atividades")
+        self.tabs.addTab(self.vista_tarefas, "Atividades")
         self.tabs.addTab(self.vista_calendario, "Calendário")
         self.tabs.addTab(self.vista_alocacao, "Alocação")
 
@@ -58,21 +60,33 @@ class JanelaPrincipal(QMainWindow):
         acao_backup.triggered.connect(self._fazer_backup)
         menu_ficheiro.addAction(acao_backup)
 
+        acao_restaurar = QAction("Restaurar base de dados a partir de backup...", self)
+        acao_restaurar.triggered.connect(self._restaurar_backup)
+        menu_ficheiro.addAction(acao_restaurar)
+
         menu_ficheiro.addSeparator()
 
-        acao_template = QAction("Descarregar template Excel...", self)
+        acao_template = QAction("Descarregar template Excel (em branco)...", self)
         acao_template.triggered.connect(self._descarregar_template)
         menu_ficheiro.addAction(acao_template)
+
+        acao_exportar_dados = QAction("Exportar dados atuais para Excel...", self)
+        acao_exportar_dados.triggered.connect(self._exportar_dados_atuais)
+        menu_ficheiro.addAction(acao_exportar_dados)
 
         acao_importar = QAction("Importar dados de Excel...", self)
         acao_importar.triggered.connect(self._importar_excel)
         menu_ficheiro.addAction(acao_importar)
 
-        menu_ficheiro.addSeparator()
+        menu_config = self.menuBar().addMenu("&Configurações")
 
-        acao_restaurar = QAction("Restaurar base de dados a partir de backup...", self)
-        acao_restaurar.triggered.connect(self._restaurar_backup)
-        menu_ficheiro.addAction(acao_restaurar)
+        acao_estados_projeto = QAction("Estados de Projetos...", self)
+        acao_estados_projeto.triggered.connect(self._gerir_estados_projeto)
+        menu_config.addAction(acao_estados_projeto)
+
+        acao_estados_tarefa = QAction("Estados de Atividades...", self)
+        acao_estados_tarefa.triggered.connect(self._gerir_estados_tarefa)
+        menu_config.addAction(acao_estados_tarefa)
 
     # ------------------------------------------------------------------
     def _fazer_backup(self):
@@ -106,6 +120,28 @@ class JanelaPrincipal(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Erro ao gerar template", str(exc))
 
+    def _exportar_dados_atuais(self):
+        destino, _ = QFileDialog.getSaveFileName(
+            self, "Exportar dados atuais para Excel",
+            "dados_atuais.xlsx", "Ficheiros Excel (*.xlsx)"
+        )
+        if not destino:
+            return
+        session = get_session()
+        try:
+            exportar_dados_atuais(destino, session)
+            QMessageBox.information(
+                self, "Exportação concluída",
+                f"Todos os dados atuais foram exportados para:\n{destino}\n\n"
+                "Podes editar este ficheiro (alterar linhas existentes, mantendo o "
+                "ID, ou acrescentar linhas novas sem ID) e depois importá-lo de "
+                "volta em 'Ficheiro > Importar dados de Excel...'."
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Erro ao exportar", str(exc))
+        finally:
+            session.close()
+
     def _importar_excel(self):
         origem, _ = QFileDialog.getOpenFileName(
             self, "Selecionar ficheiro Excel a importar", "", "Ficheiros Excel (*.xlsx)"
@@ -116,7 +152,8 @@ class JanelaPrincipal(QMainWindow):
         resp = QMessageBox.question(
             self, "Confirmar importação",
             "A importação vai criar novos registos e ATUALIZAR os já existentes "
-            "com o mesmo nome/código. Recomenda-se fazer um backup antes.\n\n"
+            "(por ID, se o ficheiro tiver essa coluna, ou por nome/código). "
+            "Recomenda-se fazer um backup antes.\n\n"
             "Continuar com a importação?"
         )
         if resp != QMessageBox.Yes:
@@ -172,6 +209,27 @@ class JanelaPrincipal(QMainWindow):
             f"Base de dados restaurada a partir de:\n{origem}\n\n"
             f"O estado anterior foi guardado em:\n{copia_seguranca}"
         )
+
+    # ------------------------------------------------------------------
+    def _gerir_estados_projeto(self):
+        def contar_uso(session, nome):
+            return session.query(Projeto).filter_by(estado=nome).count()
+
+        dialog = GerirEstadosDialog(self, "Estados de Projetos", EstadoProjeto, contar_uso, get_session)
+        dialog.exec()
+        if dialog.alterado:
+            self.vista_calendario.refresh_filtros()
+            self.vista_alocacao.refresh_filtros()
+
+    def _gerir_estados_tarefa(self):
+        def contar_uso(session, nome):
+            return session.query(Tarefa).filter_by(estado=nome).count()
+
+        dialog = GerirEstadosDialog(self, "Estados de Atividades", EstadoTarefa, contar_uso, get_session)
+        dialog.exec()
+        if dialog.alterado:
+            self.vista_calendario.refresh_filtros()
+            self.vista_alocacao.refresh_filtros()
 
     # ------------------------------------------------------------------
     def _atualizar_todas_as_vistas(self):

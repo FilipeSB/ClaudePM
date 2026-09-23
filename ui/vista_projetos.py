@@ -4,8 +4,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QDate
 from datetime import date
-from database.db import get_session
-from database.models import Projeto, Cliente, ESTADOS_PROJETO
+from database.db import get_session, listar_estados_projeto
+from database.models import Projeto, Cliente
 from ui.base_crud import BaseCrudWidget
 from utils.calculos import custo_projeto
 
@@ -29,6 +29,7 @@ class ProjetoDialog(QDialog):
         session = get_session()
         try:
             self.clientes = session.query(Cliente).order_by(Cliente.nome).all()
+            self.estados_disponiveis = listar_estados_projeto(session)
         finally:
             session.close()
 
@@ -52,8 +53,13 @@ class ProjetoDialog(QDialog):
         self.objetivos.setFixedHeight(80)
 
         self.estado_combo = QComboBox()
-        self.estado_combo.addItems(ESTADOS_PROJETO)
-        if projeto and projeto.estado in ESTADOS_PROJETO:
+        self.estado_combo.addItems(self.estados_disponiveis)
+        if projeto and projeto.estado:
+            if projeto.estado not in self.estados_disponiveis:
+                # o estado atual já não está na lista configurada (foi
+                # removido) -- mantém-se como opção extra para não se
+                # perder o valor ao abrir o formulário
+                self.estado_combo.addItem(projeto.estado)
             self.estado_combo.setCurrentText(projeto.estado)
 
         form = QFormLayout()
@@ -142,25 +148,38 @@ class VistaProjetos(BaseCrudWidget):
             dados = dialog.dados()
             if not dados["nome"]:
                 return
-            session = get_session()
-            try:
-                if obj is None:
-                    session.add(Projeto(**dados))
-                else:
-                    projeto = session.get(Projeto, obj.id)
-                    for k, v in dados.items():
-                        setattr(projeto, k, v)
-                session.commit()
-            finally:
-                session.close()
-            self.refresh()
+
+            def gravar():
+                session = get_session()
+                try:
+                    if obj is None:
+                        session.add(Projeto(**dados))
+                    else:
+                        projeto = session.get(Projeto, obj.id)
+                        for k, v in dados.items():
+                            setattr(projeto, k, v)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+
+            if self.executar_com_seguranca(gravar, "Erro ao gravar projeto"):
+                self.refresh()
 
     def eliminar(self, obj):
-        session = get_session()
-        try:
-            projeto = session.get(Projeto, obj.id)
-            if projeto:
-                session.delete(projeto)
-                session.commit()
-        finally:
-            session.close()
+        def apagar():
+            session = get_session()
+            try:
+                projeto = session.get(Projeto, obj.id)
+                if projeto:
+                    session.delete(projeto)
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        self.executar_com_seguranca(apagar, "Erro ao eliminar projeto")

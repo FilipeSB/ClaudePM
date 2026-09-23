@@ -11,6 +11,41 @@ from PySide6.QtCore import Qt
 from utils.exportacao import exportar_excel, exportar_pdf
 
 
+def _tentar_converter_numero(texto: str):
+    """
+    Tenta interpretar o texto como número, para permitir ordenação numérica
+    correta em colunas como ID, custos ("2,520.00") ou percentagens ("70%").
+    Devolve None se não for possível interpretar como número.
+    """
+    t = texto.strip()
+    if not t:
+        return None
+    t_limpo = t.rstrip("%").replace(",", "")
+    try:
+        return float(t_limpo)
+    except ValueError:
+        return None
+
+
+class ItemOrdenavel(QTableWidgetItem):
+    """
+    QTableWidgetItem que ordena numericamente quando ambos os valores
+    comparados parecem números (mesmo com formatação como "2,520.00" ou
+    "70%"), e cai para ordenação alfabética normal nos restantes casos
+    (texto, e também datas no formato ISO "AAAA-MM-DD", que já ordenam
+    corretamente como texto).
+    """
+
+    def __lt__(self, other):
+        if isinstance(other, QTableWidgetItem):
+            a = _tentar_converter_numero(self.text())
+            b = _tentar_converter_numero(other.text())
+            if a is not None and b is not None:
+                return a < b
+            return self.text() < other.text()
+        return super().__lt__(other)
+
+
 class BaseCrudWidget(QWidget):
     """
     Subclasses devem definir:
@@ -19,6 +54,13 @@ class BaseCrudWidget(QWidget):
       - self.carregar_linhas() -> list[tuple(obj, list[str])]
       - self.abrir_formulario(obj=None)      -> abre diálogo de criar/editar
       - self.eliminar(obj)                   -> remove o registo
+
+    A tabela suporta ordenação por qualquer coluna (clicando no cabeçalho).
+    Como a ordenação nativa do Qt reordena as LINHAS (incluindo os dados
+    associados a cada item), a associação obj-linha é guardada como dados
+    (Qt.UserRole) na primeira célula de cada linha, em vez de depender de
+    um índice de lista paralelo -- isso garante que Editar/Eliminar atuam
+    sempre sobre o registo certo, mesmo depois de ordenar por qualquer coluna.
     """
 
     def __init__(self, titulo: str):
@@ -51,6 +93,7 @@ class BaseCrudWidget(QWidget):
         self.tabela.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tabela.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabela.setSortingEnabled(True)
         layout.addWidget(self.tabela)
 
         self.btn_novo.clicked.connect(lambda: self.abrir_formulario(None))
@@ -58,27 +101,47 @@ class BaseCrudWidget(QWidget):
         self.btn_eliminar.clicked.connect(self._eliminar_selecionado)
         self.btn_atualizar.clicked.connect(self.refresh)
 
-        self._objetos = []  # objeto ORM correspondente a cada linha
         self.refresh()
 
     # ------------------------------------------------------------------
+    def executar_com_seguranca(self, funcao, titulo_erro="Erro"):
+        """
+        Executa 'funcao' (que deve gerir a sua própria sessão, incluindo
+        commit) e, se ocorrer qualquer excepção, mostra um erro ao
+        utilizador em vez de a deixar propagar -- o que, sem tratamento,
+        poderia fazer a aplicação inteira fechar sem qualquer aviso.
+        Devolve True se correu sem erro, False caso contrário.
+        """
+        try:
+            funcao()
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, titulo_erro, f"Não foi possível concluir a operação:\n\n{exc}")
+            return False
+
     def refresh(self):
         linhas = self.carregar_linhas()
+
+        # Desativar a ordenação durante o preenchimento evita problemas de
+        # reentrância do Qt ao inserir linhas numa tabela já ordenada.
+        self.tabela.setSortingEnabled(False)
         self.tabela.setColumnCount(len(self.colunas))
         self.tabela.setHorizontalHeaderLabels(self.colunas)
         self.tabela.setRowCount(len(linhas))
-        self._objetos = []
         for row, (obj, valores) in enumerate(linhas):
-            self._objetos.append(obj)
             for col, valor in enumerate(valores):
-                item = QTableWidgetItem(str(valor) if valor is not None else "")
+                item = ItemOrdenavel(str(valor) if valor is not None else "")
+                if col == 0:
+                    item.setData(Qt.UserRole, obj)
                 self.tabela.setItem(row, col, item)
+        self.tabela.setSortingEnabled(True)
 
     def _linha_selecionada_obj(self):
         linha = self.tabela.currentRow()
-        if linha < 0 or linha >= len(self._objetos):
+        if linha < 0:
             return None
-        return self._objetos[linha]
+        item = self.tabela.item(linha, 0)
+        return item.data(Qt.UserRole) if item else None
 
     def _editar_selecionado(self):
         obj = self._linha_selecionada_obj()

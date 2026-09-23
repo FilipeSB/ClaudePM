@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime, date
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
-from database.models import Base, Perfil, PerfilCustoHistorico
+from database.models import Base, Perfil, PerfilCustoHistorico, EstadoProjeto, EstadoTarefa, ESTADOS_PROJETO, ESTADOS_TAREFA
 
 
 def _pasta_dados_utilizador() -> str:
@@ -109,8 +109,28 @@ def init_db():
                     data_alteracao=perfil.data_atualizacao or date.today(),
                 ))
             session.commit()
+
+        # Semear os estados configuráveis de Projeto/Tarefa, se ainda não existirem.
+        if session.query(EstadoProjeto).count() == 0:
+            for i, nome in enumerate(ESTADOS_PROJETO):
+                session.add(EstadoProjeto(nome=nome, ordem=i))
+            session.commit()
+        if session.query(EstadoTarefa).count() == 0:
+            for i, nome in enumerate(ESTADOS_TAREFA):
+                session.add(EstadoTarefa(nome=nome, ordem=i))
+            session.commit()
     finally:
         session.close()
+
+
+def listar_estados_projeto(session):
+    """Nomes dos estados de projeto configurados, pela ordem definida."""
+    return [e.nome for e in session.query(EstadoProjeto).order_by(EstadoProjeto.ordem).all()]
+
+
+def listar_estados_tarefa(session):
+    """Nomes dos estados de tarefa configurados, pela ordem definida."""
+    return [e.nome for e in session.query(EstadoTarefa).order_by(EstadoTarefa.ordem).all()]
 
 
 def get_session():

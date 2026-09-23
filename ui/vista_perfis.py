@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QDoubleSpinBox, QDialogButtonBox, QVBoxLayout,
-    QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox
+    QDialog, QFormLayout, QLineEdit, QDoubleSpinBox, QDateEdit, QDialogButtonBox, QVBoxLayout,
+    QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QLabel
 )
+from PySide6.QtCore import QDate
 from datetime import date
 from database.db import get_session
 from database.models import Perfil, PerfilCustoHistorico
@@ -31,13 +32,22 @@ class PerfilDialog(QDialog):
         form.addRow("Custo / hora", self.custo_hora)
         form.addRow("Custo / dia", self.custo_dia)
 
+        # Data a partir da qual este custo passa a estar em vigor. Por
+        # defeito é hoje, mas pode ser alterada para uma data passada
+        # (para corrigir o histórico) ou futura (para agendar um aumento).
+        # Os custos dos projetos são sempre calculados com o valor em vigor
+        # na data de início de cada tarefa, por isso esta data é o que
+        # determina, de facto, quando a alteração passa a "contar".
+        self.data_vigencia = QDateEdit(calendarPopup=True)
+        self.data_vigencia.setDate(QDate.currentDate())
         if perfil:
-            aviso = QLineEdit(
-                f"Alterar os custos regista automaticamente a data de hoje ({date.today()}) "
-                "no histórico de custos deste perfil.",
-                readOnly=True,
+            form.addRow("Custo em vigor a partir de*", self.data_vigencia)
+            aviso = QLabel(
+                "Só é criado um novo registo no histórico se o custo/hora ou "
+                "custo/dia forem diferentes dos atuais."
             )
-            aviso.setStyleSheet("color: #666; border: none; background: transparent;")
+            aviso.setWordWrap(True)
+            aviso.setStyleSheet("color: #666; font-size: 11px;")
             form.addRow("", aviso)
 
         botoes = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -56,6 +66,9 @@ class PerfilDialog(QDialog):
             "custo_dia": self.custo_dia.value(),
         }
 
+    def data_vigencia_selecionada(self) -> date:
+        return self.data_vigencia.date().toPython()
+
 
 class HistoricoCustosDialog(QDialog):
     def __init__(self, parent, perfil):
@@ -66,11 +79,11 @@ class HistoricoCustosDialog(QDialog):
         layout = QVBoxLayout(self)
         tabela = QTableWidget()
         tabela.setColumnCount(3)
-        tabela.setHorizontalHeaderLabels(["Data de alteração", "Custo/Hora", "Custo/Dia"])
+        tabela.setHorizontalHeaderLabels(["Em vigor a partir de", "Custo/Hora", "Custo/Dia"])
         tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         tabela.setEditTriggers(QTableWidget.NoEditTriggers)
 
-        historico = sorted(perfil.historico_custos, key=lambda h: h.data_alteracao, reverse=True)
+        historico = sorted(perfil.historico_custos, key=lambda h: (h.data_alteracao, h.id), reverse=True)
         tabela.setRowCount(len(historico))
         for row, h in enumerate(historico):
             tabela.setItem(row, 0, QTableWidgetItem(str(h.data_alteracao)))
@@ -109,45 +122,58 @@ class VistaPerfis(BaseCrudWidget):
             dados = dialog.dados()
             if not dados["codigo"]:
                 return
-            hoje = date.today()
-            session = get_session()
-            try:
-                if obj is None:
-                    perfil = Perfil(**dados, data_atualizacao=hoje)
-                    session.add(perfil)
-                    session.flush()
-                    session.add(PerfilCustoHistorico(
-                        perfil_id=perfil.id, custo_hora=perfil.custo_hora,
-                        custo_dia=perfil.custo_dia, data_alteracao=hoje,
-                    ))
-                else:
-                    perfil = session.get(Perfil, obj.id)
-                    custo_mudou = (
-                        float(perfil.custo_hora or 0) != dados["custo_hora"]
-                        or float(perfil.custo_dia or 0) != dados["custo_dia"]
-                    )
-                    for k, v in dados.items():
-                        setattr(perfil, k, v)
-                    if custo_mudou:
-                        perfil.data_atualizacao = hoje
+            data_vigencia = dialog.data_vigencia_selecionada() if obj else date.today()
+
+            def gravar():
+                session = get_session()
+                try:
+                    if obj is None:
+                        perfil = Perfil(**dados, data_atualizacao=data_vigencia)
+                        session.add(perfil)
+                        session.flush()
                         session.add(PerfilCustoHistorico(
                             perfil_id=perfil.id, custo_hora=perfil.custo_hora,
-                            custo_dia=perfil.custo_dia, data_alteracao=hoje,
+                            custo_dia=perfil.custo_dia, data_alteracao=data_vigencia,
                         ))
-                session.commit()
-            finally:
-                session.close()
-            self.refresh()
+                    else:
+                        perfil = session.get(Perfil, obj.id)
+                        custo_mudou = (
+                            float(perfil.custo_hora or 0) != dados["custo_hora"]
+                            or float(perfil.custo_dia or 0) != dados["custo_dia"]
+                        )
+                        for k, v in dados.items():
+                            setattr(perfil, k, v)
+                        if custo_mudou:
+                            perfil.data_atualizacao = data_vigencia
+                            session.add(PerfilCustoHistorico(
+                                perfil_id=perfil.id, custo_hora=perfil.custo_hora,
+                                custo_dia=perfil.custo_dia, data_alteracao=data_vigencia,
+                            ))
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+
+            if self.executar_com_seguranca(gravar, "Erro ao gravar perfil"):
+                self.refresh()
 
     def eliminar(self, obj):
-        session = get_session()
-        try:
-            perfil = session.get(Perfil, obj.id)
-            if perfil:
-                session.delete(perfil)
-                session.commit()
-        finally:
-            session.close()
+        def apagar():
+            session = get_session()
+            try:
+                perfil = session.get(Perfil, obj.id)
+                if perfil:
+                    session.delete(perfil)
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        self.executar_com_seguranca(apagar, "Erro ao eliminar perfil")
 
     def _ver_historico(self):
         obj = self._linha_selecionada_obj()

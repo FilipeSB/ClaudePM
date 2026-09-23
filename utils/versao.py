@@ -14,10 +14,19 @@ e nos metadados do executável (version_info.txt) -- os três devem ser
 mantidos em sincronia manualmente sempre que a versão mudar aqui.
 """
 
-VERSAO = "1.2.0"
+VERSAO = "1.3.0"
 
 # Histórico resumido de versões (mais recente primeiro), para referência.
 HISTORICO_VERSOES = [
+    ("1.3.0", "Exportação de todos os dados atuais para Excel (com coluna de ID, "
+               "para reimportação por ID); gestão de estados configuráveis de "
+               "Projetos e Atividades (menu Configurações); ordenação por "
+               "qualquer coluna em todas as listagens; correção de bug nos "
+               "custos por data de vigência do perfil; correção de fecho "
+               "inesperado ao remover pessoas alocadas numa tarefa; captura "
+               "global de erros com registo em ficheiro de log; separadores "
+               "'Perfis' e 'Atividades' renomeados; filtro de estado da "
+               "atividade também na vista de Alocação."),
     ("1.2.0", "Filtro de estado multi-seleção e cores por pessoa no calendário; "
                "histórico de custos de perfis com consulta por data; "
                "restauro da base de dados a partir de backup; "

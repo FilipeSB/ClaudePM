@@ -59,7 +59,7 @@ class Perfil(Base):
     pessoas = relationship("Pessoa", back_populates="perfil")
     historico_custos = relationship(
         "PerfilCustoHistorico", back_populates="perfil",
-        cascade="all, delete-orphan", order_by="PerfilCustoHistorico.data_alteracao",
+        cascade="all, delete-orphan", order_by="PerfilCustoHistorico.data_alteracao, PerfilCustoHistorico.id",
     )
 
     def __repr__(self):
@@ -108,9 +108,23 @@ class Pessoa(Base):
 
 
 # ---------------------------------------------------------------------------
-# Projeto
+# Estados configuráveis de Projeto e de Tarefa (o utilizador pode adicionar,
+# renomear ou remover estados via menu Configurações). As listas abaixo são
+# apenas os valores por defeito usados para semear estas tabelas na primeira
+# execução.
 # ---------------------------------------------------------------------------
 ESTADOS_PROJETO = ["Planeado", "Em curso", "Concluído", "Cancelado", "Em pausa"]
+
+
+class EstadoProjeto(Base):
+    __tablename__ = "estado_projeto"
+
+    id = Column(Integer, primary_key=True)
+    nome = Column(String(50), nullable=False, unique=True)
+    ordem = Column(Integer, default=0)
+
+    def __repr__(self):
+        return self.nome
 
 
 class Projeto(Base):
@@ -135,6 +149,17 @@ class Projeto(Base):
 # Tarefa (atividade)
 # ---------------------------------------------------------------------------
 ESTADOS_TAREFA = ["Não iniciada", "Em curso", "Concluída", "Atrasada"]
+
+
+class EstadoTarefa(Base):
+    __tablename__ = "estado_tarefa"
+
+    id = Column(Integer, primary_key=True)
+    nome = Column(String(50), nullable=False, unique=True)
+    ordem = Column(Integer, default=0)
+
+    def __repr__(self):
+        return self.nome
 
 
 class Tarefa(Base):
