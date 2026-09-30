@@ -69,8 +69,9 @@ class PessoaDialog(QDialog):
 
 
 class VistaPessoas(BaseCrudWidget):
+    modelo = Pessoa
     def __init__(self):
-        self.colunas = ["ID", "Nome", "Equipa", "Perfil", "Email", "Ativo"]
+        self.colunas = ["Nome", "Equipa", "Perfil", "Email", "Ativo"]
         super().__init__("Pessoa")
 
     def carregar_linhas(self):
@@ -79,7 +80,7 @@ class VistaPessoas(BaseCrudWidget):
             pessoas = session.query(Pessoa).order_by(Pessoa.nome).all()
             return [
                 (p, [
-                    p.id, p.nome,
+                    p.nome,
                     p.equipa.nome if p.equipa else "",
                     p.perfil.codigo if p.perfil else "",
                     p.email or "",

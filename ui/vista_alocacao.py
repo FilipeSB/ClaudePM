@@ -5,12 +5,15 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFileDialog, QMessageBox
 )
 from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt
 
 from database.db import get_session, listar_estados_tarefa
 from database.models import Pessoa, Tarefa, Projeto, Cliente
 from utils.periodos import PERIODOS, intervalo_periodo, periodo_seguinte, periodo_anterior, descricao_periodo
 from utils.exportacao import exportar_excel, exportar_pdf
 from ui.filtro_multi_selecao import FiltroMultiSelecao
+from ui.itens import ItemOrdenavel
+from utils.formatacao import fmt_pct
 
 
 def _sobrepoe(inicio1, fim1, inicio2, fim2):
@@ -90,6 +93,8 @@ class VistaAlocacao(QWidget):
             ["Pessoa", "Equipa", "Perfil", "% Alocada no período", "Detalhe das Tarefas"]
         )
         self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabela.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
+        self.tabela.setSortingEnabled(True)
         layout.addWidget(self.tabela)
 
         # eventos
@@ -210,6 +215,7 @@ class VistaAlocacao(QWidget):
         session = get_session()
         try:
             pessoas = session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome).all()
+            self.tabela.setSortingEnabled(False)
             self.tabela.setRowCount(len(pessoas))
 
             for row, pessoa in enumerate(pessoas):
@@ -231,13 +237,13 @@ class VistaAlocacao(QWidget):
                         continue
 
                     total += float(a.percentagem or 0)
-                    detalhe.append(f"{t.nome} ({a.percentagem}%)")
+                    detalhe.append(f"{t.nome} ({fmt_pct(a.percentagem)})")
 
-                self.tabela.setItem(row, 0, QTableWidgetItem(pessoa.nome))
-                self.tabela.setItem(row, 1, QTableWidgetItem(pessoa.equipa.nome if pessoa.equipa else ""))
-                self.tabela.setItem(row, 2, QTableWidgetItem(pessoa.perfil.codigo if pessoa.perfil else ""))
+                self.tabela.setItem(row, 0, ItemOrdenavel(pessoa.nome))
+                self.tabela.setItem(row, 1, ItemOrdenavel(pessoa.equipa.nome if pessoa.equipa else ""))
+                self.tabela.setItem(row, 2, ItemOrdenavel(pessoa.perfil.codigo if pessoa.perfil else ""))
 
-                item_pct = QTableWidgetItem(f"{total:.0f}%")
+                item_pct = ItemOrdenavel(fmt_pct(total))
                 if total > 100:
                     item_pct.setBackground(QColor(255, 190, 190))
                 elif total == 100:
@@ -247,7 +253,8 @@ class VistaAlocacao(QWidget):
                 else:
                     item_pct.setBackground(QColor(255, 245, 200))
                 self.tabela.setItem(row, 3, item_pct)
-                self.tabela.setItem(row, 4, QTableWidgetItem(", ".join(detalhe)))
+                self.tabela.setItem(row, 4, ItemOrdenavel(", ".join(detalhe)))
+            self.tabela.setSortingEnabled(True)
         finally:
             session.close()
 

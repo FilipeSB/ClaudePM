@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime, date
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
-from database.models import Base, Perfil, PerfilCustoHistorico, EstadoProjeto, EstadoTarefa, ESTADOS_PROJETO, ESTADOS_TAREFA
+from database.models import DATA_BASE_CUSTOS, Base, Perfil, PerfilCustoHistorico, EstadoProjeto, EstadoTarefa, ESTADOS_PROJETO, ESTADOS_TAREFA
 
 
 def _pasta_dados_utilizador() -> str:
@@ -88,7 +88,7 @@ def init_db():
                     perfil_id=perfil.id,
                     custo_hora=perfil.custo_hora,
                     custo_dia=perfil.custo_dia,
-                    data_alteracao=perfil.data_atualizacao,
+                    data_alteracao=DATA_BASE_CUSTOS,
                 ))
             session.commit()
 
@@ -106,7 +106,7 @@ def init_db():
                     perfil_id=perfil.id,
                     custo_hora=perfil.custo_hora,
                     custo_dia=perfil.custo_dia,
-                    data_alteracao=perfil.data_atualizacao or date.today(),
+                    data_alteracao=DATA_BASE_CUSTOS,
                 ))
             session.commit()
 
@@ -121,6 +121,34 @@ def init_db():
             session.commit()
     finally:
         session.close()
+
+    _migrar_dados()
+
+
+def _migrar_dados():
+    """
+    Migrações de DADOS (não de esquema), controladas por PRAGMA user_version
+    para correrem uma única vez por base de dados.
+
+    v1: o primeiro registo do histórico de custos de cada perfil (o custo
+    inicial) passa a valer "desde sempre". Antes ficava com a data de
+    instalação, o que fazia com que uma alteração de custo com data de
+    vigência anterior a essa fosse ignorada nos cálculos.
+    """
+    with ENGINE.begin() as conn:
+        versao = conn.execute(text("PRAGMA user_version")).scalar() or 0
+    if versao < 1:
+        session = SessionLocal()
+        try:
+            for perfil in session.query(Perfil).all():
+                historico = sorted(perfil.historico_custos, key=lambda h: h.id)
+                if historico:
+                    historico[0].data_alteracao = DATA_BASE_CUSTOS
+            session.commit()
+        finally:
+            session.close()
+        with ENGINE.begin() as conn:
+            conn.execute(text("PRAGMA user_version = 1"))
 
 
 def listar_estados_projeto(session):

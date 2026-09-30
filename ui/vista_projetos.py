@@ -96,8 +96,9 @@ class ProjetoDialog(QDialog):
 
 
 class VistaProjetos(BaseCrudWidget):
+    modelo = Projeto
     def __init__(self):
-        self.colunas = ["ID", "Nome", "Cliente", "Início", "Fim", "Estado", "Custo Estimado (€)"]
+        self.colunas = ["Nome", "Cliente", "Início", "Fim", "Estado", "Custo Estimado (€)"]
         self.exportavel = True
         self.nome_exportacao = "projetos"
         self._custo_ate_data = None  # None = sem filtro; definido antes do primeiro refresh()
@@ -125,14 +126,14 @@ class VistaProjetos(BaseCrudWidget):
     def carregar_linhas(self):
         ate_data = self._custo_ate_data
         rotulo_coluna = f"Custo até {ate_data} (€)" if ate_data else "Custo Estimado (€)"
-        self.colunas = ["ID", "Nome", "Cliente", "Início", "Fim", "Estado", rotulo_coluna]
+        self.colunas = ["Nome", "Cliente", "Início", "Fim", "Estado", rotulo_coluna]
 
         session = get_session()
         try:
             projetos = session.query(Projeto).order_by(Projeto.data_inicio.desc()).all()
             return [
                 (p, [
-                    p.id, p.nome,
+                    p.nome,
                     p.cliente.nome if p.cliente else "",
                     p.data_inicio, p.data_fim, p.estado,
                     f"{custo_projeto(p, ate_data):,.2f}",

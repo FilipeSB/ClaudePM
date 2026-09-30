@@ -1,9 +1,10 @@
 from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QFileDialog, QMessageBox
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtCore import QUrl
 
-from database.db import fazer_backup, nome_sugerido_backup, restaurar_backup, get_session, DB_PATH
+from database.db import fazer_backup, nome_sugerido_backup, restaurar_backup, get_session, DB_PATH, PASTA_DADOS
 from database.models import EstadoProjeto, EstadoTarefa, Projeto, Tarefa
 from utils.importacao import gerar_template, importar_excel, exportar_dados_atuais
 from utils.versao import VERSAO
@@ -50,6 +51,14 @@ class JanelaPrincipal(QMainWindow):
         # para refletir alterações feitas noutras vistas.
         self.tabs.currentChanged.connect(self._ao_mudar_separador)
 
+        # O calendário abre as janelas de edição das outras vistas
+        self.vista_calendario.definir_editores({
+            'cliente': self.vista_clientes.editar_por_id,
+            'projeto': self.vista_projetos.editar_por_id,
+            'tarefa': self.vista_tarefas.editar_por_id,
+            'pessoa': self.vista_pessoas.editar_por_id,
+        })
+
         self._criar_menu()
 
     # ------------------------------------------------------------------
@@ -77,6 +86,15 @@ class JanelaPrincipal(QMainWindow):
         acao_importar = QAction("Importar dados de Excel...", self)
         acao_importar.triggered.connect(self._importar_excel)
         menu_ficheiro.addAction(acao_importar)
+
+        menu_ajuda = self.menuBar().addMenu("&Ajuda")
+        acao_pasta = QAction("Abrir pasta de dados e registo de erros...", self)
+        acao_pasta.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(PASTA_DADOS)))
+        menu_ajuda.addAction(acao_pasta)
+        acao_sobre = QAction("Sobre...", self)
+        acao_sobre.triggered.connect(lambda: QMessageBox.information(
+            self, "Sobre", f"Gestão de Pessoas e Projetos\nVersão {VERSAO}\n\nDados em:\n{PASTA_DADOS}"))
+        menu_ajuda.addAction(acao_sobre)
 
         menu_config = self.menuBar().addMenu("&Configurações")
 
@@ -242,8 +260,10 @@ class JanelaPrincipal(QMainWindow):
         self.vista_alocacao.refresh_filtros()
 
     def _ao_mudar_separador(self, index):
+        # Ao mudar de separador, a vista mostrada é sempre atualizada (as
+        # alterações feitas noutra vista, ex: no Calendário, ficam logo visíveis).
         widget = self.tabs.widget(index)
-        if widget is self.vista_calendario:
-            self.vista_calendario.refresh_filtros()
-        elif widget is self.vista_alocacao:
-            self.vista_alocacao.refresh_filtros()
+        if hasattr(widget, 'refresh_filtros'):
+            widget.refresh_filtros()
+        elif hasattr(widget, 'refresh'):
+            widget.refresh()

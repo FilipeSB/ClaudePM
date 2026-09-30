@@ -9,6 +9,9 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
+# Data que representa "desde sempre": o custo inicial de um perfil vale desde o início dos tempos.
+DATA_BASE_CUSTOS = date(2000, 1, 1)
+
 
 # ---------------------------------------------------------------------------
 # Cliente

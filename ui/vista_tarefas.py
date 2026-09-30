@@ -4,11 +4,13 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QScrollArea, QFrame
 )
 from PySide6.QtCore import QTimer
+from sqlalchemy.orm import selectinload
 from database.db import get_session, listar_estados_tarefa
 from database.models import Tarefa, Projeto, Pessoa, Alocacao, CATEGORIA_LABELS
 from ui.base_crud import BaseCrudWidget
 from ui.vista_projetos import qdate_to_pydate, pydate_to_qdate
 from utils.calculos import horas_para_percentagem, percentagem_para_horas, horas_base_por_dia
+from utils.formatacao import fmt_pct
 
 
 def sobreposicao_datas(inicio1, fim1, inicio2, fim2):
@@ -19,11 +21,10 @@ def sobreposicao_datas(inicio1, fim1, inicio2, fim2):
 
 def verificar_sobrealocacoes(session, tarefa_id, data_inicio, data_fim, alocacoes_novas):
     """
-    Para cada (pessoa_id, percentagem) da tarefa em edição, soma as percentagens
-    de OUTRAS tarefas dessa pessoa cujo período se sobreponha ao da tarefa atual,
-    e verifica se, somado à nova percentagem, ultrapassa 100%.
-
-    Retorna lista de strings descrevendo os conflitos encontrados (vazia se OK).
+    Para cada (pessoa_id, percentagem, ...) da atividade em edição, soma as
+    percentagens de OUTRAS atividades dessa pessoa com período sobreposto e
+    verifica se, somado à nova percentagem, ultrapassa 100%.
+    Retorna lista de textos com os conflitos (vazia se estiver tudo bem).
     """
     conflitos = []
     for pessoa_id, pct_nova, *_ in alocacoes_novas:
@@ -34,7 +35,7 @@ def verificar_sobrealocacoes(session, tarefa_id, data_inicio, data_fim, alocacoe
         total_outras = 0.0
         for a in pessoa.alocacoes:
             if a.tarefa_id == tarefa_id:
-                continue  # ignora alocações da própria tarefa (serão substituídas)
+                continue  # ignora alocações da própria atividade (serão substituídas)
             t = a.tarefa
             if not t:
                 continue
@@ -44,8 +45,8 @@ def verificar_sobrealocacoes(session, tarefa_id, data_inicio, data_fim, alocacoe
         total = total_outras + pct_nova
         if total > 100:
             conflitos.append(
-                f"{pessoa.nome}: {total:.0f}% no total ({total_outras:.0f}% noutras tarefas "
-                f"sobrepostas + {pct_nova:.0f}% nesta tarefa)"
+                f"{pessoa.nome}: {fmt_pct(total)} no total ({fmt_pct(total_outras)} noutras atividades "
+                f"sobrepostas + {fmt_pct(pct_nova)} nesta atividade)"
             )
     return conflitos
 
@@ -55,6 +56,7 @@ class AlocacaoRowWidget(QWidget):
 
     def __init__(self, pessoas, pessoa_id=None, percentagem=0, tipo="percentagem",
                  horas=None, categoria="8h_uteis", ao_remover=None):
+        """pessoas: lista de tuplos (id, texto_a_mostrar)."""
         super().__init__()
         self._ao_remover = ao_remover
 
@@ -62,8 +64,8 @@ class AlocacaoRowWidget(QWidget):
         layout.setContentsMargins(0, 2, 0, 2)
 
         self.pessoa_combo = QComboBox()
-        for p in pessoas:
-            self.pessoa_combo.addItem(p.nome, p.id)
+        for pid, texto in pessoas:
+            self.pessoa_combo.addItem(texto, pid)
         if pessoa_id:
             idx = self.pessoa_combo.findData(pessoa_id)
             if idx >= 0:
@@ -84,11 +86,12 @@ class AlocacaoRowWidget(QWidget):
             self.categoria_combo.setCurrentIndex(idx_cat)
 
         self.valor_spin = QDoubleSpinBox()
+        self.valor_spin.setDecimals(1)
         self._configurar_valor_spin(percentagem, horas, tipo, categoria)
 
         self.btn_remover = QPushButton("✕")
         self.btn_remover.setFixedWidth(28)
-        self.btn_remover.setToolTip("Remover esta pessoa da tarefa")
+        self.btn_remover.setToolTip("Remover esta pessoa da atividade")
         self.btn_remover.clicked.connect(self._remover)
 
         layout.addWidget(self.pessoa_combo, 3)
@@ -114,29 +117,26 @@ class AlocacaoRowWidget(QWidget):
     def _ao_mudar_tipo_ou_categoria(self):
         tipo = self.tipo_combo.currentData()
         categoria = self.categoria_combo.currentData()
-        valor_atual = self.valor_spin.value()
         if tipo == "horas":
-            base = horas_base_por_dia(categoria)
-            # se veio de percentagem, converte; se já estava em horas, mantém proporcional à nova categoria
-            self.valor_spin.setRange(0, base)
+            self.valor_spin.setRange(0, horas_base_por_dia(categoria))
             self.valor_spin.setSuffix(" h")
         else:
             self.valor_spin.setRange(0, 100)
             self.valor_spin.setSuffix(" %")
 
     def _remover(self):
-        # A remoção é feita de forma diferida (QTimer.singleShot) em vez de
-        # imediata, porque destruir este próprio widget de dentro do
-        # handler de clique do seu botão-filho, de forma síncrona, é um
-        # padrão instável em Qt e foi identificado como causa provável de
-        # fechos inesperados da aplicação. Diferir para a próxima iteração
-        # do event loop evita esse problema.
+        # Remoção diferida: destruir este widget de dentro do handler de
+        # clique do seu próprio botão é instável em Qt (causa de fechos
+        # inesperados). Diferir para a iteração seguinte do event loop evita-o.
         QTimer.singleShot(0, self._remover_efetivo)
 
     def _remover_efetivo(self):
         if self._ao_remover:
             self._ao_remover(self)
-        self.setParent(None)
+        pai = self.parentWidget()
+        if pai is not None and pai.layout() is not None:
+            pai.layout().removeWidget(self)
+        self.hide()
         self.deleteLater()
 
     def dados(self):
@@ -157,36 +157,64 @@ class AlocacaoRowWidget(QWidget):
 class TarefaDialog(QDialog):
     def __init__(self, parent=None, tarefa=None):
         super().__init__(parent)
-        self.setWindowTitle("Tarefa / Atividade")
+        self.setWindowTitle("Atividade")
         self.tarefa = tarefa
-        self.resize(560, 560)
+        self.resize(620, 600)
 
+        # Todos os dados necessários são lidos aqui, dentro da sessão, para
+        # guardar apenas valores simples (nunca objetos ligados à base de dados).
         session = get_session()
         try:
-            self.projetos = session.query(Projeto).order_by(Projeto.nome).all()
-            self.pessoas = session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome).all()
+            projetos = session.query(Projeto).options(selectinload(Projeto.cliente)).order_by(Projeto.nome).all()
+            self._info_projetos = [
+                (p.id, p.nome, p.cliente.nome if p.cliente else "", p.data_inicio, p.data_fim)
+                for p in projetos
+            ]
+            pessoas_ativas = session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome).all()
             self.estados_disponiveis = listar_estados_tarefa(session)
+
             alocacoes_existentes = []
-            if tarefa:
+            pessoas_extra = []
+            if tarefa is not None and getattr(tarefa, "id", None):
+                alocs = session.query(Alocacao).filter_by(tarefa_id=tarefa.id).all()
                 alocacoes_existentes = [
                     (a.pessoa_id, float(a.percentagem or 0), a.tipo or "percentagem",
                      float(a.horas) if a.horas is not None else None, a.categoria or "8h_uteis")
-                    for a in tarefa.alocacoes
+                    for a in alocs
                 ]
-            self._datas_projetos = {p.id: (p.data_inicio, p.data_fim) for p in self.projetos}
+                ativos_ids = {p.id for p in pessoas_ativas}
+                extra_ids = {a[0] for a in alocacoes_existentes} - ativos_ids
+                if extra_ids:
+                    # pessoas já alocadas mas entretanto marcadas como inativas:
+                    # mantêm-se na lista para não perder/trocar a alocação
+                    pessoas_extra = session.query(Pessoa).filter(Pessoa.id.in_(extra_ids)).all()
+            self.pessoas = (
+                [(p.id, p.nome) for p in pessoas_ativas]
+                + [(p.id, f"{p.nome} (inativo)") for p in pessoas_extra]
+            )
         finally:
             session.close()
 
+        self._datas_projetos = {i: (ini, fim) for i, _n, _c, ini, fim in self._info_projetos}
+        self._cliente_do_projeto = {i: c for i, _n, c, _ini, _fim in self._info_projetos}
+
         self.nome = QLineEdit(tarefa.nome if tarefa else "")
 
+        # Na lista de projetos mostra-se também o cliente a que pertencem
         self.projeto_combo = QComboBox()
         self.projeto_combo.addItem("(sem projeto)", None)
-        for p in self.projetos:
-            self.projeto_combo.addItem(p.nome, p.id)
+        for pid, pnome, cliente, _ini, _fim in self._info_projetos:
+            texto = f"{pnome}   —   Cliente: {cliente}" if cliente else f"{pnome}   —   (sem cliente)"
+            self.projeto_combo.addItem(texto, pid)
         if tarefa and tarefa.projeto_id:
             idx = self.projeto_combo.findData(tarefa.projeto_id)
             if idx >= 0:
                 self.projeto_combo.setCurrentIndex(idx)
+
+        self.label_cliente = QLabel("")
+        self.label_cliente.setStyleSheet("font-weight: bold;")
+        self.projeto_combo.currentIndexChanged.connect(self._atualizar_label_cliente)
+        self._atualizar_label_cliente()
 
         self.data_inicio = QDateEdit(calendarPopup=True)
         self.data_inicio.setDate(pydate_to_qdate(tarefa.data_inicio if tarefa else None))
@@ -196,9 +224,6 @@ class TarefaDialog(QDialog):
         # Ao escolher (ativamente) um projeto, as datas passam a ter por
         # defeito as datas do projeto -- mas continuam editáveis à mão depois.
         self.projeto_combo.activated.connect(self._preencher_datas_do_projeto)
-        if not tarefa and self.projetos:
-            # nova tarefa sem projeto ainda escolhido: não força datas
-            pass
 
         self.estado_combo = QComboBox()
         self.estado_combo.addItems(self.estados_disponiveis)
@@ -210,6 +235,7 @@ class TarefaDialog(QDialog):
         form = QFormLayout()
         form.addRow("Nome*", self.nome)
         form.addRow("Projeto", self.projeto_combo)
+        form.addRow("Cliente do projeto", self.label_cliente)
         form.addRow("Data início", self.data_inicio)
         form.addRow("Data fim", self.data_fim)
         form.addRow("Estado", self.estado_combo)
@@ -225,17 +251,17 @@ class TarefaDialog(QDialog):
             cabecalho.addWidget(lbl, largura)
 
         btn_add = QPushButton("+ Adicionar pessoa")
-        btn_add.clicked.connect(self._adicionar_linha_alocacao)
+        btn_add.clicked.connect(lambda: self._adicionar_linha_alocacao())
 
         botoes = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         botoes.accepted.connect(self._validar_e_aceitar)
         botoes.rejected.connect(self.reject)
 
-        area_alocacoes = QFrame()
-        area_alocacoes.setLayout(self.alocacoes_container)
+        self._area_alocacoes = QFrame()
+        self._area_alocacoes.setLayout(self.alocacoes_container)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setWidget(area_alocacoes)
+        scroll.setWidget(self._area_alocacoes)
         scroll.setMinimumHeight(160)
 
         layout = QVBoxLayout(self)
@@ -248,16 +274,21 @@ class TarefaDialog(QDialog):
 
         if not self.pessoas:
             btn_add.setEnabled(False)
+        elif alocacoes_existentes:
+            for pessoa_id, pct, tipo, horas, categoria in alocacoes_existentes:
+                self._adicionar_linha_alocacao(pessoa_id, pct, tipo, horas, categoria)
         else:
-            if alocacoes_existentes:
-                for pessoa_id, pct, tipo, horas, categoria in alocacoes_existentes:
-                    self._adicionar_linha_alocacao(pessoa_id, pct, tipo, horas, categoria)
-            else:
-                self._adicionar_linha_alocacao()
+            self._adicionar_linha_alocacao()
+
+    def _atualizar_label_cliente(self, _index=None):
+        projeto_id = self.projeto_combo.currentData()
+        if projeto_id is None:
+            self.label_cliente.setText("—")
+        else:
+            self.label_cliente.setText(self._cliente_do_projeto.get(projeto_id) or "(projeto sem cliente)")
 
     def _preencher_datas_do_projeto(self, _index=None):
-        projeto_id = self.projeto_combo.currentData()
-        datas = self._datas_projetos.get(projeto_id)
+        datas = self._datas_projetos.get(self.projeto_combo.currentData())
         if datas and datas[0] and datas[1]:
             self.data_inicio.setDate(pydate_to_qdate(datas[0]))
             self.data_fim.setDate(pydate_to_qdate(datas[1]))
@@ -291,7 +322,7 @@ class TarefaDialog(QDialog):
         }
 
     def alocacoes(self):
-        """Retorna lista de (pessoa_id, percentagem, tipo, horas, categoria), ignorando linhas sem pessoa."""
+        """Lista de (pessoa_id, percentagem, tipo, horas, categoria), ignorando linhas vazias."""
         resultado = []
         for linha in self.linhas_alocacao:
             pessoa_id, pct, tipo, horas, categoria = linha.dados()
@@ -301,23 +332,34 @@ class TarefaDialog(QDialog):
 
 
 class VistaTarefas(BaseCrudWidget):
+    modelo = Tarefa
+
     def __init__(self):
-        self.colunas = ["ID", "Nome", "Projeto", "Início", "Fim", "Estado", "Pessoas Alocadas"]
-        super().__init__("Tarefa")
+        self.colunas = ["Cliente", "Projeto", "Nome", "Início", "Fim", "Estado", "Pessoas Alocadas"]
+        super().__init__("Atividade")
 
     def carregar_linhas(self):
         session = get_session()
         try:
-            tarefas = session.query(Tarefa).order_by(Tarefa.data_inicio.desc()).all()
+            tarefas = (
+                session.query(Tarefa)
+                .options(
+                    selectinload(Tarefa.alocacoes).selectinload(Alocacao.pessoa),
+                    selectinload(Tarefa.projeto).selectinload(Projeto.cliente),
+                )
+                .order_by(Tarefa.data_inicio.desc())
+                .all()
+            )
             linhas = []
             for t in tarefas:
                 pessoas_txt = ", ".join(
-                    f"{a.pessoa.nome} ({a.percentagem}%)" for a in t.alocacoes if a.pessoa
+                    f"{a.pessoa.nome} ({fmt_pct(a.percentagem)})" for a in t.alocacoes if a.pessoa
                 )
+                cliente = t.projeto.cliente.nome if (t.projeto and t.projeto.cliente) else ""
                 linhas.append((t, [
-                    t.id, t.nome,
+                    cliente,
                     t.projeto.nome if t.projeto else "",
-                    t.data_inicio, t.data_fim, t.estado, pessoas_txt,
+                    t.nome, t.data_inicio, t.data_fim, t.estado, pessoas_txt,
                 ]))
             return linhas
         finally:
@@ -383,7 +425,7 @@ class VistaTarefas(BaseCrudWidget):
                 finally:
                     session.close()
             except Exception as exc:
-                QMessageBox.critical(self, "Erro ao gravar tarefa", f"Não foi possível gravar:\n\n{exc}")
+                QMessageBox.critical(self, "Erro ao gravar atividade", f"Não foi possível gravar:\n\n{exc}")
                 return
             self.refresh()
 

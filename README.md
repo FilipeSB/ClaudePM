@@ -218,6 +218,41 @@ O que **não** está resolvido, por implicar custos:
   corrigido em 24-48h e ajuda a "reputação" do ficheiro para todos os
   utilizadores.
 
+## Funcionalidades adicionadas (v1.4.0)
+
+- **Correção de fecho inesperado ao editar Atividades**: a janela de edição
+  de uma atividade passou a trabalhar apenas com dados simples (números,
+  texto), nunca com objetos ligados a uma sessão da base de dados já
+  fechada — essa era a causa mais provável dos fechos inesperados nesta
+  operação. Continua também em vigor a rede de segurança geral (qualquer
+  erro fica registado em `erros.log`, em vez de fechar a app sem aviso —
+  acessível em *Ajuda > Abrir pasta de dados e registo de erros*).
+- **Percentagens com 1 casa decimal** em todos os ecrãs (ex: "33.3%").
+- **Coluna de ID escondida** em todas as listagens (continua a existir
+  internamente, só deixou de ser mostrada).
+- **Perfis**: no histórico de custos, é possível eliminar registos
+  individuais (botão "Eliminar registo selecionado"), mantendo sempre
+  pelo menos um.
+- **Projetos**: corrigido o cálculo de custo por data — antes, o custo
+  original de cada perfil ficava associado à data de instalação da app,
+  o que fazia com que alterações de custo com data de vigência anterior a
+  essa fossem ignoradas. Agora o custo original vale "desde sempre", e o
+  cálculo percorre corretamente cada período de custo constante do
+  histórico. Bases de dados já existentes são corrigidas automaticamente
+  ao abrir esta versão (migração de dados, uma única vez).
+- **Atividades**: ao escolher o projeto (criar ou editar), mostra-se o
+  cliente a que esse projeto pertence; a listagem ganhou uma coluna
+  Cliente.
+- **Calendário**:
+  - Todas as colunas passaram a ser ordenáveis (clicar no cabeçalho).
+  - Clicar num Cliente, Projeto, Atividade ou Pessoa abre a respetiva
+    janela de edição.
+  - Clicar no Estado da Atividade mostra a lista de estados para escolher
+    e altera logo esse registo.
+  - Clicar na % de Alocação pede um novo valor e grava de imediato
+    (com o mesmo aviso de sobre-alocação usado no formulário da atividade).
+- **Alocação**: todas as colunas passaram a ser ordenáveis.
+
 ## Versionamento
 
 A versão da aplicação segue o esquema semântico `MAJOR.MINOR.PATCH`:

@@ -39,8 +39,9 @@ class ClienteDialog(QDialog):
 
 
 class VistaClientes(BaseCrudWidget):
+    modelo = Cliente
     def __init__(self):
-        self.colunas = ["ID", "Nome", "Contacto", "Ativo"]
+        self.colunas = ["Nome", "Contacto", "Ativo"]
         super().__init__("Cliente")
 
     def carregar_linhas(self):
@@ -48,7 +49,7 @@ class VistaClientes(BaseCrudWidget):
         try:
             clientes = session.query(Cliente).order_by(Cliente.nome).all()
             return [
-                (c, [c.id, c.nome, c.contacto or "", "Sim" if c.ativo else "Não"])
+                (c, [c.nome, c.contacto or "", "Sim" if c.ativo else "Não"])
                 for c in clientes
             ]
         finally:

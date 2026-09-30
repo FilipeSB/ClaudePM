@@ -14,10 +14,20 @@ e nos metadados do executável (version_info.txt) -- os três devem ser
 mantidos em sincronia manualmente sempre que a versão mudar aqui.
 """
 
-VERSAO = "1.3.0"
+VERSAO = "1.4.0"
 
 # Histórico resumido de versões (mais recente primeiro), para referência.
 HISTORICO_VERSOES = [
+    ("1.4.0", "Correcao de fecho inesperado ao editar atividades (dialogo passa a "
+               "usar apenas dados simples, nunca objetos ligados a sessoes fechadas "
+               "da base de dados); percentagens com 1 casa decimal e sem coluna de "
+               "ID em todos os ecrans; eliminacao de registos do historico de custos "
+               "de perfis (com minimo obrigatorio de 1); calculo de custo do projeto "
+               "corrigido para refletir corretamente o historico de custos por data; "
+               "atividades mostram o cliente do projeto (na listagem e ao escolher "
+               "projeto); calendario com colunas ordenaveis, cliques que abrem os "
+               "registos (cliente/projeto/atividade/pessoa) e edicao direta do "
+               "estado e da percentagem de alocacao; alocacao com colunas ordenaveis."),
     ("1.3.0", "Exportação de todos os dados atuais para Excel (com coluna de ID, "
                "para reimportação por ID); gestão de estados configuráveis de "
                "Projetos e Atividades (menu Configurações); ordenação por "

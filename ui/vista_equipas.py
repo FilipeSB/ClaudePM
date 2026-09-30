@@ -36,8 +36,9 @@ class EquipaDialog(QDialog):
 
 
 class VistaEquipas(BaseCrudWidget):
+    modelo = Equipa
     def __init__(self):
-        self.colunas = ["ID", "Nome", "Descrição", "Nº Pessoas"]
+        self.colunas = ["Nome", "Descrição", "Nº Pessoas"]
         super().__init__("Equipa")
 
     def carregar_linhas(self):
@@ -45,7 +46,7 @@ class VistaEquipas(BaseCrudWidget):
         try:
             equipas = session.query(Equipa).order_by(Equipa.nome).all()
             return [
-                (e, [e.id, e.nome, e.descricao or "", len(e.pessoas)])
+                (e, [e.nome, e.descricao or "", len(e.pessoas)])
                 for e in equipas
             ]
         finally:

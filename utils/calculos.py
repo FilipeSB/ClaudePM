@@ -1,27 +1,38 @@
 """
-Utilitários de cálculo de custos e conversão horas <-> percentagem,
-partilhados entre vistas.
+Utilitários de cálculo de custos e conversão horas <-> percentagem.
+
+Os custos são calculados DIA A DIA, usando o custo do perfil em vigor em
+cada dia (segundo o histórico de custos), e podem ser limitados até uma data
+(só conta o trabalho até essa data, mesmo que a atividade continue depois).
 """
 from datetime import timedelta, date as date_cls
+from database.models import DATA_BASE_CUSTOS
 
 
 def dias_uteis(inicio, fim):
-    """Número de dias úteis (Seg-Sex) entre duas datas, inclusive."""
+    """Nº de dias úteis (Seg-Sex) entre duas datas, inclusive (cálculo direto, sem ciclo)."""
     if not inicio or not fim or fim < inicio:
         return 0
-    total = 0
-    dia = inicio
-    while dia <= fim:
-        if dia.weekday() < 5:  # 0=Segunda ... 4=Sexta
-            total += 1
-        dia += timedelta(days=1)
-    return total
+    total = (fim - inicio).days + 1
+    semanas, resto = divmod(total, 7)
+    uteis = semanas * 5
+    dia_semana = inicio.weekday()
+    for i in range(resto):
+        if (dia_semana + i) % 7 < 5:
+            uteis += 1
+    return uteis
 
 
 def dias_calendario(inicio, fim):
     if not inicio or not fim or fim < inicio:
         return 0
     return (fim - inicio).days + 1
+
+
+def dias_no_intervalo(inicio, fim, categoria="8h_uteis"):
+    if categoria == "24h_todos":
+        return dias_calendario(inicio, fim)
+    return dias_uteis(inicio, fim)
 
 
 def horas_base_por_dia(categoria: str) -> int:
@@ -42,68 +53,105 @@ def percentagem_para_horas(percentagem: float, categoria: str) -> float:
 
 
 def dias_tarefa(tarefa, categoria: str = "8h_uteis"):
-    """
-    Nº de dias 'de trabalho' da tarefa, segundo a categoria da alocação:
-      - "8h_uteis"  -> conta só dias úteis (Seg-Sex)
-      - "24h_todos" -> conta todos os dias do calendário
-    """
     if not tarefa or not tarefa.data_inicio or not tarefa.data_fim:
         return 0
-    if categoria == "24h_todos":
-        return dias_calendario(tarefa.data_inicio, tarefa.data_fim)
-    return dias_uteis(tarefa.data_inicio, tarefa.data_fim)
+    return dias_no_intervalo(tarefa.data_inicio, tarefa.data_fim, categoria)
+
+
+# ---------------------------------------------------------------------------
+# Histórico de custos dos perfis
+# ---------------------------------------------------------------------------
+def _historico_ordenado(perfil):
+    return sorted(perfil.historico_custos, key=lambda h: (h.data_alteracao, h.id))
 
 
 def custo_perfil_na_data(perfil, data_referencia=None):
-    """
-    Devolve (custo_hora, custo_dia) do perfil, válidos à data 'data_referencia'
-    (usa o registo de histórico mais recente cuja data_alteracao <= data_referencia).
-    Se não houver nenhum registo anterior a essa data, usa o mais antigo disponível.
-    Sem histórico algum, cai para os valores atuais do perfil.
-    """
+    """(custo_hora, custo_dia) do perfil em vigor na data indicada."""
     if not perfil:
         return 0.0, 0.0
     if data_referencia is None:
         data_referencia = date_cls.today()
-
-    historico = sorted(perfil.historico_custos, key=lambda h: (h.data_alteracao, h.id))
+    historico = _historico_ordenado(perfil)
     if not historico:
         return float(perfil.custo_hora or 0), float(perfil.custo_dia or 0)
-
     candidatos = [h for h in historico if h.data_alteracao <= data_referencia]
     escolhido = candidatos[-1] if candidatos else historico[0]
     return float(escolhido.custo_hora or 0), float(escolhido.custo_dia or 0)
 
 
-def custo_alocacao(alocacao):
+def _segmentos_de_custo(perfil):
     """
-    Custo de uma alocação = % alocação * custo/dia do perfil (válido à DATA
-    DE INÍCIO DA TAREFA, isto é, o custo em vigor quando o trabalho foi/será
-    realizado) * dias 'de trabalho' da tarefa.
+    Lista de (inicio, fim, custo_hora, custo_dia): períodos consecutivos em
+    que o custo é constante. O primeiro começa "desde sempre" (None) e o
+    último termina "para sempre" (None). Registos com a mesma data: vale o
+    mais recente (maior id).
+    """
+    historico = _historico_ordenado(perfil)
+    if not historico:
+        return [(None, None, float(perfil.custo_hora or 0), float(perfil.custo_dia or 0))]
+    colapsado = []
+    for h in historico:
+        if colapsado and colapsado[-1].data_alteracao == h.data_alteracao:
+            colapsado[-1] = h
+        else:
+            colapsado.append(h)
+    segmentos = []
+    for i, h in enumerate(colapsado):
+        ini = None if i == 0 else h.data_alteracao
+        fim = None if i == len(colapsado) - 1 else colapsado[i + 1].data_alteracao - timedelta(days=1)
+        segmentos.append((ini, fim, float(h.custo_hora or 0), float(h.custo_dia or 0)))
+    return segmentos
+
+
+def sincronizar_perfil_com_historico(perfil, hoje=None):
+    """Atualiza o custo 'atual' do perfil para o valor em vigor hoje, segundo o histórico."""
+    hoje = hoje or date_cls.today()
+    historico = _historico_ordenado(perfil)
+    if not historico:
+        return
+    validos = [h for h in historico if h.data_alteracao <= hoje]
+    escolhido = validos[-1] if validos else historico[0]
+    perfil.custo_hora = escolhido.custo_hora
+    perfil.custo_dia = escolhido.custo_dia
+    if escolhido.data_alteracao != DATA_BASE_CUSTOS:
+        perfil.data_atualizacao = escolhido.data_alteracao
+
+
+# ---------------------------------------------------------------------------
+# Custos
+# ---------------------------------------------------------------------------
+def custo_alocacao(alocacao, ate_data=None):
+    """
+    Custo de uma alocação = soma, para cada período de custo constante do
+    perfil, de (dias de trabalho no período x % alocação x custo/dia).
+    Só conta o trabalho da atividade até 'ate_data' (inclusive), se indicada.
     """
     tarefa = alocacao.tarefa
     pessoa = alocacao.pessoa
     if not tarefa or not pessoa or not pessoa.perfil:
-        return 0
+        return 0.0
+    if not tarefa.data_inicio or not tarefa.data_fim:
+        return 0.0
     categoria = alocacao.categoria or "8h_uteis"
-    dias = dias_tarefa(tarefa, categoria)
     pct = float(alocacao.percentagem or 0) / 100
-    _, custo_dia = custo_perfil_na_data(pessoa.perfil, tarefa.data_inicio)
-    return dias * pct * custo_dia
+    inicio_t = tarefa.data_inicio
+    fim_t = tarefa.data_fim if ate_data is None else min(tarefa.data_fim, ate_data)
+    if fim_t < inicio_t:
+        return 0.0
+    total = 0.0
+    for ini, fim, _custo_hora, custo_dia in _segmentos_de_custo(pessoa.perfil):
+        s = inicio_t if ini is None else max(inicio_t, ini)
+        e = fim_t if fim is None else min(fim_t, fim)
+        if e < s:
+            continue
+        total += dias_no_intervalo(s, e, categoria) * pct * custo_dia
+    return total
 
 
-def custo_tarefa(tarefa):
-    return sum(custo_alocacao(a) for a in tarefa.alocacoes)
+def custo_tarefa(tarefa, ate_data=None):
+    return sum(custo_alocacao(a, ate_data) for a in tarefa.alocacoes)
 
 
 def custo_projeto(projeto, ate_data=None):
-    """
-    Custo total do projeto. Se 'ate_data' for indicada, só soma as tarefas
-    que já tinham começado nessa data (data_inicio <= ate_data) -- ou seja,
-    "quanto já foi/terá sido gasto até esta data", usando sempre o custo do
-    perfil válido na data de início de cada tarefa.
-    """
-    tarefas = projeto.tarefas
-    if ate_data is not None:
-        tarefas = [t for t in tarefas if t.data_inicio and t.data_inicio <= ate_data]
-    return sum(custo_tarefa(t) for t in tarefas)
+    """Custo do projeto; com 'ate_data', só o trabalho realizado até essa data."""
+    return sum(custo_tarefa(t, ate_data) for t in projeto.tarefas)
