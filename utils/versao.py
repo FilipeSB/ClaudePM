@@ -14,10 +14,19 @@ e nos metadados do executável (version_info.txt) -- os três devem ser
 mantidos em sincronia manualmente sempre que a versão mudar aqui.
 """
 
-VERSAO = "1.4.0"
+VERSAO = "1.5.0"
 
 # Histórico resumido de versões (mais recente primeiro), para referência.
 HISTORICO_VERSOES = [
+    ("1.5.0", "Feriados (Configuracoes > Feriados) com importacao automatica da "
+               "internet, marcados no calendario; cor por pessoa usada nas barras "
+               "do calendario e da alocacao (barras proporcionais); alocacao sempre "
+               "em dias uteis de 8h (categoria removida; conversao horas/percentagem "
+               "imediata); atividades com Cliente -> Projeto em cascata e filtros por "
+               "cliente/projeto; filtro por cliente em projetos; duplo clique abre "
+               "a edicao em todas as listagens; calendario: trocar pessoa, escolher "
+               "horas ou percentagem, fins de semana/feriados sombreados; menu Ajuda "
+               "mais a direita; ao selecionar um estado, o nome aparece para editar."),
     ("1.4.0", "Correcao de fecho inesperado ao editar atividades (dialogo passa a "
                "usar apenas dados simples, nunca objetos ligados a sessoes fechadas "
                "da base de dados); percentagens com 1 casa decimal e sem coluna de "

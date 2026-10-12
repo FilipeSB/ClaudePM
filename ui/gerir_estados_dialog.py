@@ -33,6 +33,7 @@ class GerirEstadosDialog(QDialog):
         ))
 
         self.lista = QListWidget()
+        self.lista.currentItemChanged.connect(self._ao_selecionar)
         layout.addWidget(self.lista)
 
         linha_nova = QHBoxLayout()
@@ -93,6 +94,12 @@ class GerirEstadosDialog(QDialog):
         self.campo_novo.clear()
         self.alterado = True
         self._carregar()
+
+    def _ao_selecionar(self, item_atual, _item_anterior):
+        """Ao selecionar um estado, o campo de texto passa a mostrar o nome
+        atual -- fica pronto a editar e a usar em 'Renomear selecionado'."""
+        if item_atual is not None:
+            self.campo_novo.setText(item_atual.text())
 
     def _item_selecionado_id(self):
         item = self.lista.currentItem()

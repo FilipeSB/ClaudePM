@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QDate
 from datetime import date
-from database.db import get_session, listar_estados_projeto
+from database.db import get_session, listar_estados_projeto, conjunto_datas_feriados
 from database.models import Projeto, Cliente
 from ui.base_crud import BaseCrudWidget
 from utils.calculos import custo_projeto
@@ -118,6 +118,37 @@ class VistaProjetos(BaseCrudWidget):
         self.check_custo_ate.toggled.connect(self._ao_alterar_filtro_custo)
         self.data_custo_ate.dateChanged.connect(self._ao_alterar_filtro_custo)
 
+        # --- filtro por Cliente ---
+        filtro_layout = QHBoxLayout()
+        filtro_layout.addWidget(QLabel("Cliente:"))
+        self.filtro_cliente = QComboBox()
+        filtro_layout.addWidget(self.filtro_cliente)
+        filtro_layout.addStretch()
+        self.layout().insertLayout(2, filtro_layout)
+        self.filtro_cliente.currentIndexChanged.connect(self.refresh)
+        self._popular_filtro_cliente()
+
+    def _popular_filtro_cliente(self):
+        session = get_session()
+        try:
+            atual = self.filtro_cliente.currentData() if self.filtro_cliente.count() else None
+            self.filtro_cliente.blockSignals(True)
+            self.filtro_cliente.clear()
+            self.filtro_cliente.addItem("Todos", None)
+            for c in session.query(Cliente).order_by(Cliente.nome):
+                self.filtro_cliente.addItem(c.nome, c.id)
+            if atual is not None:
+                idx = self.filtro_cliente.findData(atual)
+                if idx >= 0:
+                    self.filtro_cliente.setCurrentIndex(idx)
+            self.filtro_cliente.blockSignals(False)
+        finally:
+            session.close()
+
+    def refresh_filtros(self):
+        self._popular_filtro_cliente()
+        self.refresh()
+
     def _ao_alterar_filtro_custo(self):
         self.data_custo_ate.setEnabled(self.check_custo_ate.isChecked())
         self._custo_ate_data = self.data_custo_ate.date().toPython() if self.check_custo_ate.isChecked() else None
@@ -128,15 +159,20 @@ class VistaProjetos(BaseCrudWidget):
         rotulo_coluna = f"Custo até {ate_data} (€)" if ate_data else "Custo Estimado (€)"
         self.colunas = ["Nome", "Cliente", "Início", "Fim", "Estado", rotulo_coluna]
 
+        cliente_id = getattr(self, "filtro_cliente", None) and self.filtro_cliente.currentData()
         session = get_session()
         try:
-            projetos = session.query(Projeto).order_by(Projeto.data_inicio.desc()).all()
+            query = session.query(Projeto)
+            if cliente_id:
+                query = query.filter_by(cliente_id=cliente_id)
+            projetos = query.order_by(Projeto.data_inicio.desc()).all()
+            feriados = conjunto_datas_feriados(session)
             return [
                 (p, [
                     p.nome,
                     p.cliente.nome if p.cliente else "",
                     p.data_inicio, p.data_fim, p.estado,
-                    f"{custo_projeto(p, ate_data):,.2f}",
+                    f"{custo_projeto(p, ate_data, feriados):,.2f}",
                 ])
                 for p in projetos
             ]

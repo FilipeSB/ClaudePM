@@ -18,6 +18,7 @@ from ui.vista_tarefas import VistaTarefas
 from ui.vista_calendario import VistaCalendario
 from ui.vista_alocacao import VistaAlocacao
 from ui.gerir_estados_dialog import GerirEstadosDialog
+from ui.gerir_feriados_dialog import GerirFeriadosDialog
 
 
 class JanelaPrincipal(QMainWindow):
@@ -87,15 +88,6 @@ class JanelaPrincipal(QMainWindow):
         acao_importar.triggered.connect(self._importar_excel)
         menu_ficheiro.addAction(acao_importar)
 
-        menu_ajuda = self.menuBar().addMenu("&Ajuda")
-        acao_pasta = QAction("Abrir pasta de dados e registo de erros...", self)
-        acao_pasta.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(PASTA_DADOS)))
-        menu_ajuda.addAction(acao_pasta)
-        acao_sobre = QAction("Sobre...", self)
-        acao_sobre.triggered.connect(lambda: QMessageBox.information(
-            self, "Sobre", f"Gestão de Pessoas e Projetos\nVersão {VERSAO}\n\nDados em:\n{PASTA_DADOS}"))
-        menu_ajuda.addAction(acao_sobre)
-
         menu_config = self.menuBar().addMenu("&Configurações")
 
         acao_estados_projeto = QAction("Estados de Projetos...", self)
@@ -105,6 +97,22 @@ class JanelaPrincipal(QMainWindow):
         acao_estados_tarefa = QAction("Estados de Atividades...", self)
         acao_estados_tarefa.triggered.connect(self._gerir_estados_tarefa)
         menu_config.addAction(acao_estados_tarefa)
+
+        menu_config.addSeparator()
+
+        acao_feriados = QAction("Feriados...", self)
+        acao_feriados.triggered.connect(self._gerir_feriados)
+        menu_config.addAction(acao_feriados)
+
+        # O menu Ajuda fica sempre o mais à direita, por isso é o último a ser criado.
+        menu_ajuda = self.menuBar().addMenu("&Ajuda")
+        acao_pasta = QAction("Abrir pasta de dados e registo de erros...", self)
+        acao_pasta.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(PASTA_DADOS)))
+        menu_ajuda.addAction(acao_pasta)
+        acao_sobre = QAction("Sobre...", self)
+        acao_sobre.triggered.connect(lambda: QMessageBox.information(
+            self, "Sobre", f"Gestão de Pessoas e Projetos\nVersão {VERSAO}\n\nDados em:\n{PASTA_DADOS}"))
+        menu_ajuda.addAction(acao_sobre)
 
     # ------------------------------------------------------------------
     def _fazer_backup(self):
@@ -249,13 +257,24 @@ class JanelaPrincipal(QMainWindow):
             self.vista_calendario.refresh_filtros()
             self.vista_alocacao.refresh_filtros()
 
+    def _gerir_feriados(self):
+        dialog = GerirFeriadosDialog(self)
+        dialog.exec()
+        if dialog.alterado:
+            self.vista_calendario.refresh_filtros()
+
     # ------------------------------------------------------------------
     def _atualizar_todas_as_vistas(self):
         for vista in (
             self.vista_clientes, self.vista_equipas, self.vista_perfis,
             self.vista_pessoas, self.vista_projetos, self.vista_tarefas,
         ):
-            vista.refresh()
+            # as vistas com filtros próprios (Projetos, Atividades) também
+            # têm de repovoar os filtros, não só recarregar a tabela
+            if hasattr(vista, "refresh_filtros"):
+                vista.refresh_filtros()
+            else:
+                vista.refresh()
         self.vista_calendario.refresh_filtros()
         self.vista_alocacao.refresh_filtros()
 

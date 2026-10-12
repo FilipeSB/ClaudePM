@@ -20,12 +20,13 @@ Ordem de importação (respeitando dependências): Clientes, Equipas, Perfis,
 Pessoas, Projetos, Tarefas, Alocacoes.
 """
 from datetime import datetime, date
+from utils.cores import cor_valida
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 from database.models import (
     Cliente, Equipa, Perfil, Pessoa, Projeto, Tarefa, Alocacao,
-    TIPOS_ALOCACAO, CATEGORIAS_ALOCACAO,
+    TIPOS_ALOCACAO,
 )
 
 # Colunas do TEMPLATE em branco (sem ID)
@@ -33,12 +34,12 @@ FOLHAS = {
     "Clientes": ["Nome", "Contacto", "Ativo (Sim/Não)"],
     "Equipas": ["Nome", "Descrição"],
     "Perfis": ["Código (CC01-CC07)", "Designação", "Custo/Hora", "Custo/Dia"],
-    "Pessoas": ["Nome", "Equipa (nome)", "Perfil (código)", "Email", "Ativo (Sim/Não)"],
+    "Pessoas": ["Nome", "Equipa (nome)", "Perfil (código)", "Email", "Ativo (Sim/Não)", "Cor (#RRGGBB, opcional)"],
     "Projetos": ["Nome", "Cliente (nome)", "Data Início (AAAA-MM-DD)", "Data Fim (AAAA-MM-DD)",
                  "Objetivos", "Estado"],
     "Tarefas": ["Nome", "Projeto (nome)", "Data Início (AAAA-MM-DD)", "Data Fim (AAAA-MM-DD)", "Estado"],
     "Alocacoes": ["Tarefa (nome)", "Projeto (nome)", "Pessoa (nome)", "Tipo (percentagem/horas)",
-                  "Percentagem (0-100)", "Horas", "Categoria (8h_uteis/24h_todos)"],
+                  "Percentagem (0-100)", "Horas (opcional)"],
 }
 
 EXEMPLOS = {
@@ -85,8 +86,7 @@ def gerar_template(caminho: str):
         "4. Na folha 'Alocacoes', preenche OU 'Percentagem' OU 'Horas' (não ambos):",
         "   - Tipo 'percentagem': preenche a coluna Percentagem (0 a 100).",
         "   - Tipo 'horas': preenche a coluna Horas; a percentagem é calculada",
-        "     automaticamente a partir da Categoria escolhida.",
-        "5. Categoria: '8h_uteis' (8 horas em dias úteis) ou '24h_todos' (24h todos os dias).",
+        "     automaticamente (8 horas = 100%, só em dias úteis).",
         "6. Podes importar este ficheiro em: menu Ficheiro > Importar dados de Excel.",
         "7. Registos com o mesmo nome/código de um já existente são ATUALIZADOS, não duplicados.",
     ]
@@ -127,7 +127,7 @@ def exportar_dados_atuais(caminho: str, session):
     pessoas = session.query(Pessoa).order_by(Pessoa.id).all()
     _escrever_folha(wb, "Pessoas", ["ID"] + FOLHAS["Pessoas"], [
         [p.id, p.nome, p.equipa.nome if p.equipa else "", p.perfil.codigo if p.perfil else "",
-         p.email or "", "Sim" if p.ativo else "Não"]
+         p.email or "", "Sim" if p.ativo else "Não", p.cor or ""]
         for p in pessoas
     ])
 
@@ -151,7 +151,7 @@ def exportar_dados_atuais(caminho: str, session):
     _escrever_folha(wb, "Alocacoes", ["ID"] + FOLHAS["Alocacoes"], [
         [a.id, a.tarefa.nome if a.tarefa else "", (a.tarefa.projeto.nome if a.tarefa and a.tarefa.projeto else ""),
          a.pessoa.nome if a.pessoa else "", a.tipo or "percentagem",
-         float(a.percentagem or 0), float(a.horas) if a.horas is not None else "", a.categoria or "8h_uteis"]
+         float(a.percentagem or 0), float(a.horas) if a.horas is not None else ""]
         for a in alocacoes
     ])
 
@@ -333,6 +333,9 @@ def importar_excel(caminho: str, session):
             pessoa.perfil_id = perfil.id if perfil else None
             pessoa.email = _valor(linha, 3, "")
             pessoa.ativo = _bool_pt(_valor(linha, 4), True)
+            cor = _valor(linha, 5)
+            if cor and cor_valida(str(cor).strip()):
+                pessoa.cor = str(cor).strip().upper()
             resumo["Pessoas"] += 1
         session.flush()
 
@@ -424,12 +427,9 @@ def importar_excel(caminho: str, session):
 
             tipo = str(_valor(linha, 3, "percentagem") or "percentagem").strip().lower()
             tipo = tipo if tipo in TIPOS_ALOCACAO else "percentagem"
-            categoria = str(_valor(linha, 6, "8h_uteis") or "8h_uteis").strip()
-            categoria = categoria if categoria in CATEGORIAS_ALOCACAO else "8h_uteis"
-
             if tipo == "horas":
                 horas = float(_valor(linha, 5, 0) or 0)
-                percentagem = horas_para_percentagem(horas, categoria)
+                percentagem = horas_para_percentagem(horas)
             else:
                 horas = None
                 percentagem = float(_valor(linha, 4, 0) or 0)
@@ -458,7 +458,6 @@ def importar_excel(caminho: str, session):
                 alocacao.pessoa_id = pessoa.id
             alocacao.tipo = tipo
             alocacao.horas = horas
-            alocacao.categoria = categoria
             alocacao.percentagem = percentagem
             resumo["Alocacoes"] += 1
         session.flush()

@@ -2,10 +2,11 @@ from datetime import date
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFileDialog, QMessageBox
+    QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFileDialog, QMessageBox,
+    QStyledItemDelegate, QStyle
 )
-from PySide6.QtGui import QColor
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import Qt, QRect
 
 from database.db import get_session, listar_estados_tarefa
 from database.models import Pessoa, Tarefa, Projeto, Cliente
@@ -14,6 +15,30 @@ from utils.exportacao import exportar_excel, exportar_pdf
 from ui.filtro_multi_selecao import FiltroMultiSelecao
 from ui.itens import ItemOrdenavel
 from utils.formatacao import fmt_pct
+from utils.cores import cor_da_pessoa
+from ui.barras import desenhar_barra
+
+
+R_PCT = Qt.UserRole + 20
+R_COR = Qt.UserRole + 21
+
+
+class BarraAlocacaoDelegate(QStyledItemDelegate):
+    """
+    Desenha, na coluna "% Alocada no período", uma barra cujo comprimento é
+    proporcional à percentagem (100% = célula toda) e que usa a cor da pessoa.
+    Acima de 100% (sobre-alocação) a barra fica cheia com contorno vermelho.
+    """
+
+    def paint(self, painter, option, index):
+        pct = index.data(R_PCT)
+        if pct is None:
+            super().paint(painter, option, index)
+            return
+        cor = index.data(R_COR) or "#4E79A7"
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        desenhar_barra(painter, option.rect.adjusted(3, 4, -3, -4), float(pct), cor)
 
 
 def _sobrepoe(inicio1, fim1, inicio2, fim2):
@@ -93,6 +118,8 @@ class VistaAlocacao(QWidget):
             ["Pessoa", "Equipa", "Perfil", "% Alocada no período", "Detalhe das Tarefas"]
         )
         self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._delegate_barra = BarraAlocacaoDelegate(self.tabela)
+        self.tabela.setItemDelegateForColumn(3, self._delegate_barra)
         self.tabela.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.tabela.setSortingEnabled(True)
         layout.addWidget(self.tabela)
@@ -244,14 +271,8 @@ class VistaAlocacao(QWidget):
                 self.tabela.setItem(row, 2, ItemOrdenavel(pessoa.perfil.codigo if pessoa.perfil else ""))
 
                 item_pct = ItemOrdenavel(fmt_pct(total))
-                if total > 100:
-                    item_pct.setBackground(QColor(255, 190, 190))
-                elif total == 100:
-                    item_pct.setBackground(QColor(200, 240, 200))
-                elif total == 0:
-                    item_pct.setBackground(QColor(230, 230, 230))
-                else:
-                    item_pct.setBackground(QColor(255, 245, 200))
+                item_pct.setData(R_PCT, total)
+                item_pct.setData(R_COR, cor_da_pessoa(pessoa.cor, pessoa.id))
                 self.tabela.setItem(row, 3, item_pct)
                 self.tabela.setItem(row, 4, ItemOrdenavel(", ".join(detalhe)))
             self.tabela.setSortingEnabled(True)

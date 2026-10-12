@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime, date
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
-from database.models import DATA_BASE_CUSTOS, Base, Perfil, PerfilCustoHistorico, EstadoProjeto, EstadoTarefa, ESTADOS_PROJETO, ESTADOS_TAREFA
+from database.models import DATA_BASE_CUSTOS, Base, Feriado, Perfil, PerfilCustoHistorico, EstadoProjeto, EstadoTarefa, ESTADOS_PROJETO, ESTADOS_TAREFA
 
 
 def _pasta_dados_utilizador() -> str:
@@ -60,12 +60,19 @@ def _migrar_esquema():
     novas_colunas = {
         "tipo": "VARCHAR(20) DEFAULT 'percentagem'",
         "horas": "NUMERIC(5,2)",
-        "categoria": "VARCHAR(20) DEFAULT '8h_uteis'",
     }
     with ENGINE.begin() as conn:
         for nome, definicao in novas_colunas.items():
             if nome not in colunas_existentes:
                 conn.execute(text(f"ALTER TABLE alocacao ADD COLUMN {nome} {definicao}"))
+        # (a antiga coluna "categoria" pode continuar a existir em bases de
+        # dados vindas de versões anteriores; fica sem uso, sem problema)
+
+    if "pessoa" in inspector.get_table_names():
+        colunas_pessoa = {c["name"] for c in inspector.get_columns("pessoa")}
+        if "cor" not in colunas_pessoa:
+            with ENGINE.begin() as conn:
+                conn.execute(text("ALTER TABLE pessoa ADD COLUMN cor VARCHAR(7)"))
 
 
 def init_db():
@@ -212,3 +219,16 @@ def restaurar_backup(origem: str) -> str:
     init_db()
 
     return seguranca
+
+
+def listar_feriados(session, ano=None):
+    """Lista de objetos Feriado, ordenados por data (opcionalmente só de um ano)."""
+    query = session.query(Feriado)
+    if ano is not None:
+        query = query.filter(Feriado.data >= date(ano, 1, 1), Feriado.data <= date(ano, 12, 31))
+    return query.order_by(Feriado.data).all()
+
+
+def conjunto_datas_feriados(session):
+    """Set de datas (date) de todos os feriados -- para verificação rápida."""
+    return {f.data for f in session.query(Feriado).all()}

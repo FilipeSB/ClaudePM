@@ -33,4 +33,5 @@ PyInstaller.__main__.run([
     "--noupx",
     "--icon=assets/icon.ico",
     "--version-file=version_info.txt",
+    "--hidden-import=requests",  # usado (importado dentro de uma função) na importação de feriados
 ])

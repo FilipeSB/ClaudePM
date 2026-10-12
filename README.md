@@ -218,6 +218,36 @@ O que **não** está resolvido, por implicar custos:
   corrigido em 24-48h e ajuda a "reputação" do ficheiro para todos os
   utilizadores.
 
+## Funcionalidades adicionadas (v1.5.0)
+
+- **Feriados** (*Configurações > Feriados*): lista de feriados que podes
+  adicionar/remover à mão ou **importar automaticamente da internet**
+  (Portugal, Espanha, Brasil, ...; usa a API pública gratuita
+  date.nager.at — requer ligação à internet). Os feriados aparecem a rosa
+  no Calendário e não contam como dias de trabalho (nem para a alocação,
+  nem para o custo dos projetos).
+- **Alocação sempre em dias úteis de 8 horas**: a opção "Categoria" foi
+  removida. 8 h = 100%; ao trocar entre percentagem e horas o valor é
+  convertido de imediato. Fins de semana e feriados nunca têm alocação.
+- **Cor por pessoa** (campo no registo da pessoa): usada nas barras do
+  Calendário e da Alocação. As barras da Alocação têm o comprimento
+  proporcional à percentagem (acima de 100% ficam cheias, com contorno
+  vermelho).
+- **Atividades**: ao criar/editar escolhe-se primeiro o Cliente e depois o
+  Projeto (só os desse cliente); a listagem tem filtros por Cliente e Projeto.
+- **Projetos**: filtro por Cliente.
+- **Duplo clique** em qualquer registo (Clientes, Equipas, Perfis, Pessoas,
+  Projetos, Atividades) abre a janela de edição.
+- **Calendário**: clicar na Pessoa permite trocá-la (lista, como no Estado;
+  inclui a opção "Editar a pessoa atual"); clicar na % de Alocação pergunta
+  se o valor é em percentagem ou horas (os registos mostram sempre
+  percentagem); fins de semana (cinzento) e feriados (rosa) assinalados.
+- **Estados**: ao selecionar um estado, o seu nome aparece no campo, pronto
+  para editar e renomear.
+- O menu **Ajuda** é agora o último (mais à direita).
+- A exportação/importação Excel inclui a cor das pessoas; a coluna
+  "Categoria" deixou de existir (ficheiros antigos continuam a importar).
+
 ## Funcionalidades adicionadas (v1.4.0)
 
 - **Correção de fecho inesperado ao editar Atividades**: a janela de edição

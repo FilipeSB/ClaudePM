@@ -65,6 +65,8 @@ class BaseCrudWidget(QWidget):
         self.tabela.setSortingEnabled(True)
         layout.addWidget(self.tabela)
 
+        self.tabela.cellDoubleClicked.connect(lambda row, col: self._editar_selecionado())
+
         self.btn_novo.clicked.connect(lambda: self.abrir_formulario(None))
         self.btn_editar.clicked.connect(self._editar_selecionado)
         self.btn_eliminar.clicked.connect(self._eliminar_selecionado)

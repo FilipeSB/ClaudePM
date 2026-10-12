@@ -9,27 +9,27 @@ from PySide6.QtGui import QColor, QPainter, QCursor
 from PySide6.QtCore import Qt, QRect, QTimer
 from sqlalchemy.orm import selectinload
 
-from database.db import get_session, listar_estados_tarefa
-from database.models import Tarefa, Projeto, Cliente, Pessoa, Alocacao
+from database.db import get_session, listar_estados_tarefa, conjunto_datas_feriados
+from database.models import Tarefa, Projeto, Cliente, Pessoa, Alocacao, Feriado
 from utils.periodos import (
     PERIODOS, intervalo_periodo, periodo_seguinte, periodo_anterior,
     descricao_periodo, dias_do_periodo, meses_do_ano,
 )
 from utils.exportacao import exportar_excel, exportar_pdf
-from utils.calculos import percentagem_para_horas
+from utils.calculos import percentagem_para_horas, horas_para_percentagem, e_dia_util
+from utils.cores import cor_da_pessoa
 from utils.formatacao import fmt_pct
 from ui.filtro_multi_selecao import FiltroMultiSelecao
 from ui.itens import ItemOrdenavel
+from ui.barras import desenhar_barra
 from ui.vista_tarefas import verificar_sobrealocacoes
 
 DIAS_SEMANA_PT = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
-# Paleta de cores distintas, uma por pessoa (repete em ciclo se houver muitas pessoas)
-PALETA_PESSOAS = [
-    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
-    "#EDC949", "#AF7AA1", "#FF9DA7", "#9C755F", "#BAB0AC",
-]
+# Cores das colunas que não são dias úteis
+COR_FIM_SEMANA = "#E3E3E3"
+COR_FERIADO = "#F8D7DA"
 
 N_BASE = 6  # Cliente, Projeto, Atividade, Pessoa, % Alocação, Estado da Atividade
 
@@ -60,20 +60,7 @@ class BarraPercentagemDelegate(QStyledItemDelegate):
         cor = index.data(R_BARRA_COR) or "#4E79A7"
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
-        rect = option.rect.adjusted(2, 3, -2, -3)
-        painter.save()
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QColor("#bbbbbb"))
-        painter.setBrush(QColor("#EDEDED"))
-        painter.drawRoundedRect(rect, 3, 3)
-        largura = int(rect.width() * min(float(pct), 100.0) / 100.0)
-        if largura > 0:
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(cor))
-            painter.drawRoundedRect(QRect(rect.x(), rect.y(), largura, rect.height()), 3, 3)
-        painter.setPen(QColor("#111111"))
-        painter.drawText(rect, Qt.AlignCenter, fmt_pct(pct))
-        painter.restore()
+        desenhar_barra(painter, option.rect.adjusted(2, 3, -2, -3), float(pct), cor)
 
 
 class VistaCalendario(QWidget):
@@ -83,9 +70,12 @@ class VistaCalendario(QWidget):
     pessoa com a sua cor. Todas as colunas são ordenáveis.
 
     Cliques:
-      - Cliente / Projeto / Atividade / Pessoa: abre a janela de edição do registo.
-      - % Alocação: pede o novo valor.
+      - Cliente / Projeto / Atividade: abre a janela de edição do registo.
+      - Pessoa: mostra a lista de pessoas para trocar a pessoa alocada
+        (e uma opção para editar a pessoa atual).
+      - % Alocação: pergunta se o valor é em percentagem ou horas, e pede o valor.
       - Estado da Atividade: mostra a lista de estados para escolher.
+    Os fins de semana e feriados aparecem a cinzento/rosa e não têm alocação.
     """
 
     def __init__(self):
@@ -145,8 +135,9 @@ class VistaCalendario(QWidget):
         filtros_box.setLayout(filtros_form)
         layout.addWidget(filtros_box)
 
-        dica = QLabel("Clica num Cliente, Projeto, Atividade ou Pessoa para o editar; "
-                      "clica na % de Alocação ou no Estado para os alterar diretamente.")
+        dica = QLabel("Clica num Cliente, Projeto ou Atividade para o editar; clica na Pessoa, na "
+                      "% de Alocação ou no Estado para os alterar diretamente. "
+                      "Cinzento = fim de semana; rosa = feriado (sem alocação).")
         dica.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(dica)
 
@@ -300,8 +291,14 @@ class VistaCalendario(QWidget):
         return resultado
 
     @staticmethod
-    def _percentagem_no_dia(tarefa, alocacao, ini, fim):
+    def _percentagem_no_dia(tarefa, alocacao, ini, fim, feriados=None):
+        """
+        % da alocação na coluna [ini, fim]. A alocação só existe em dias úteis:
+        numa coluna de um dia, fins de semana e feriados dão sempre 0.
+        """
         if not (tarefa.data_inicio <= fim and ini <= tarefa.data_fim):
+            return 0.0
+        if ini == fim and not e_dia_util(ini, feriados):
             return 0.0
         return float(alocacao.percentagem or 0)
 
@@ -318,14 +315,31 @@ class VistaCalendario(QWidget):
         try:
             linhas_dados = self._linhas_filtradas(session, periodo_ini, periodo_fim)
 
-            self._cores_pessoas = {}
-            for pessoa_id, _nome in sorted({a.pessoa.id: a.pessoa.nome for _, a in linhas_dados}.items(), key=lambda x: x[1]):
-                self._cores_pessoas[pessoa_id] = PALETA_PESSOAS[len(self._cores_pessoas) % len(PALETA_PESSOAS)]
+            # Cada pessoa usa a cor escolhida no seu registo
+            self._cores_pessoas = {
+                a.pessoa.id: cor_da_pessoa(a.pessoa.cor, a.pessoa.id) for _, a in linhas_dados
+            }
+            feriados_desc = {f.data: (f.descricao or "Feriado") for f in session.query(Feriado).all()}
+            feriados = set(feriados_desc)
 
             self.tabela.setSortingEnabled(False)
             self.tabela.clearContents()
             self.tabela.setColumnCount(N_BASE + len(colunas_periodo))
             self.tabela.setHorizontalHeaderLabels(cabecalhos_base + [c[0] for c in colunas_periodo])
+            # Cor de fundo (e dica) por coluna: None = dia útil normal
+            cor_coluna = {}
+            if periodo != "Anual":
+                for off, (_rot, c_ini, _c_fim) in enumerate(colunas_periodo):
+                    if c_ini in feriados:
+                        cor_coluna[off] = (COR_FERIADO, f"Feriado: {feriados_desc[c_ini]}")
+                    elif c_ini.weekday() >= 5:
+                        cor_coluna[off] = (COR_FIM_SEMANA, "Fim de semana")
+                for off, (cor, dica_col) in cor_coluna.items():
+                    cab = self.tabela.horizontalHeaderItem(N_BASE + off)
+                    if cab is not None:
+                        cab.setBackground(QColor(cor))
+                        cab.setForeground(QColor("#000000"))
+                        cab.setToolTip(dica_col)
             header = self.tabela.horizontalHeader()
             for i in range(N_BASE):
                 header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
@@ -352,12 +366,15 @@ class VistaCalendario(QWidget):
                     item.setToolTip("Clica para editar" if col != 4 and col != 5 else "Clica para alterar")
                     self.tabela.setItem(row, col, item)
 
-                cor = self._cores_pessoas.get(a.pessoa.id, PALETA_PESSOAS[0])
+                cor = self._cores_pessoas.get(a.pessoa.id) or cor_da_pessoa(a.pessoa.cor, a.pessoa.id)
                 for off, (_rotulo, c_ini, c_fim) in enumerate(colunas_periodo):
-                    pct = self._percentagem_no_dia(t, a, c_ini, c_fim)
+                    pct = self._percentagem_no_dia(t, a, c_ini, c_fim, feriados)
                     item = ItemOrdenavel(fmt_pct(pct) if pct else "")
                     item.setData(R_BARRA_PCT, pct)
                     item.setData(R_BARRA_COR, cor)
+                    if off in cor_coluna:
+                        item.setBackground(QColor(cor_coluna[off][0]))
+                        item.setToolTip(cor_coluna[off][1])
                     self.tabela.setItem(row, N_BASE + off, item)
             self.tabela.setSortingEnabled(True)
         finally:
@@ -385,7 +402,7 @@ class VistaCalendario(QWidget):
         elif col == 2:
             acao = ("tarefa", tarefa_id)
         elif col == 3:
-            acao = ("pessoa", item.data(R_PESSOA) or 0)
+            acao = ("pessoa", item.data(R_ALOC) or 0, item.data(R_PESSOA) or 0)
         elif col == 4:
             acao = ("pct", item.data(R_ALOC) or 0, float(item.data(R_PCT) or 0))
         else:
@@ -396,13 +413,15 @@ class VistaCalendario(QWidget):
     def _executar_acao(self, acao):
         try:
             tipo = acao[0]
-            if tipo in ("cliente", "projeto", "tarefa", "pessoa"):
+            if tipo in ("cliente", "projeto", "tarefa"):
                 registo_id = acao[1]
                 editor = self._editores.get(tipo)
                 if not registo_id or editor is None:
                     return
                 editor(registo_id)
                 self.refresh_filtros()
+            elif tipo == "pessoa":
+                self._alterar_pessoa(acao[1], acao[2])
             elif tipo == "estado":
                 self._alterar_estado(acao[1], acao[2])
             elif tipo == "pct":
@@ -450,22 +469,122 @@ class VistaCalendario(QWidget):
             session.close()
         self._atualizar()
 
+    # --- pessoa alocada ---
+    def _escolher_pessoa(self, pessoas, atual_id):
+        """pessoas: lista de (id, nome). Devolve o id escolhido, 'editar' ou None."""
+        menu = QMenu(self)
+        for pid, nome in pessoas:
+            acao = menu.addAction(nome)
+            acao.setData(pid)
+            acao.setCheckable(True)
+            acao.setChecked(pid == atual_id)
+        menu.addSeparator()
+        acao_editar = menu.addAction("Editar a pessoa atual...")
+        acao_editar.setData("editar")
+        escolhida = menu.exec(QCursor.pos())
+        return escolhida.data() if escolhida is not None else None
+
+    def _alterar_pessoa(self, aloc_id, pessoa_atual_id):
+        if not aloc_id:
+            return
+        session = get_session()
+        try:
+            pessoas = [(p.id, p.nome) for p in session.query(Pessoa).filter_by(ativo=True).order_by(Pessoa.nome)]
+            if pessoa_atual_id and pessoa_atual_id not in {pid for pid, _ in pessoas}:
+                atual = session.get(Pessoa, pessoa_atual_id)
+                if atual is not None:
+                    pessoas.append((atual.id, f"{atual.nome} (inativo)"))
+        finally:
+            session.close()
+        escolhida = self._escolher_pessoa(pessoas, pessoa_atual_id)
+        if escolhida is None:
+            return
+        if escolhida == "editar":
+            editor = self._editores.get("pessoa")
+            if editor is not None and pessoa_atual_id:
+                editor(pessoa_atual_id)
+                self.refresh_filtros()
+            return
+        if escolhida == pessoa_atual_id:
+            return
+        self._gravar_pessoa(aloc_id, escolhida)
+
+    def _gravar_pessoa(self, aloc_id, nova_pessoa_id, confirmar_sobrealocacao=True):
+        session = get_session()
+        try:
+            aloc = session.get(Alocacao, aloc_id)
+            if aloc is None:
+                return
+            tarefa = aloc.tarefa
+            if any(o.pessoa_id == nova_pessoa_id for o in tarefa.alocacoes if o.id != aloc.id):
+                QMessageBox.warning(
+                    self, "Pessoa já alocada",
+                    "Essa pessoa já está alocada a esta atividade. Edita a alocação existente em vez de duplicar."
+                )
+                return
+            if confirmar_sobrealocacao:
+                conflitos = verificar_sobrealocacoes(
+                    session, tarefa.id, tarefa.data_inicio, tarefa.data_fim,
+                    [(nova_pessoa_id, float(aloc.percentagem or 0))]
+                )
+                if conflitos:
+                    resp = QMessageBox.warning(
+                        self, "Sobre-alocação detetada",
+                        "Esta pessoa ficaria alocada acima de 100% em período sobreposto:\n\n"
+                        + "\n".join(conflitos) + "\n\nQueres gravar mesmo assim?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                    )
+                    if resp != QMessageBox.Yes:
+                        return
+            aloc.pessoa_id = nova_pessoa_id
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        self._atualizar()
+
     # --- percentagem de alocação ---
-    def _pedir_percentagem(self, atual):
-        valor, ok = QInputDialog.getDouble(
-            self, "Percentagem de alocação", "Nova percentagem (%):", float(atual), 0.0, 100.0, 1
+    def _pedir_valor_alocacao(self, atual_pct):
+        """
+        Pergunta se o valor é em percentagem ou em horas (por dia útil de 8h) e
+        pede o valor nessa unidade. Devolve (percentagem, tipo, horas) ou None.
+        A percentagem é sempre o valor que fica guardado e visível nos registos.
+        """
+        unidade, ok = QInputDialog.getItem(
+            self, "Alocação", "Introduzir o valor em:",
+            ["Percentagem (%)", "Horas por dia útil (h)"], 0, False
         )
-        return valor if ok else None
+        if not ok:
+            return None
+        if unidade.startswith("Horas"):
+            valor, ok = QInputDialog.getDouble(
+                self, "Alocação em horas", "Horas por dia útil (8 h = 100%):",
+                percentagem_para_horas(atual_pct), 0.0, 8.0, 1
+            )
+            if not ok:
+                return None
+            return horas_para_percentagem(valor), "horas", valor
+        valor, ok = QInputDialog.getDouble(
+            self, "Alocação em percentagem", "Nova percentagem (%):", float(atual_pct), 0.0, 100.0, 1
+        )
+        if not ok:
+            return None
+        return valor, "percentagem", None
 
     def _alterar_percentagem(self, aloc_id, atual):
         if not aloc_id:
             return
-        novo = self._pedir_percentagem(atual)
-        if novo is None or abs(novo - atual) < 1e-9:
+        resultado = self._pedir_valor_alocacao(atual)
+        if resultado is None:
             return
-        self._gravar_percentagem(aloc_id, novo)
+        novo, tipo, horas = resultado
+        if abs(novo - atual) < 1e-9:
+            return
+        self._gravar_percentagem(aloc_id, novo, tipo=tipo, horas=horas)
 
-    def _gravar_percentagem(self, aloc_id, novo, confirmar_sobrealocacao=True):
+    def _gravar_percentagem(self, aloc_id, novo, confirmar_sobrealocacao=True, tipo="percentagem", horas=None):
         session = get_session()
         try:
             aloc = session.get(Alocacao, aloc_id)
@@ -486,8 +605,8 @@ class VistaCalendario(QWidget):
                     if resp != QMessageBox.Yes:
                         return
             aloc.percentagem = novo
-            if aloc.tipo == "horas":
-                aloc.horas = percentagem_para_horas(novo, aloc.categoria or "8h_uteis")
+            aloc.tipo = tipo
+            aloc.horas = horas
             session.commit()
         except Exception:
             session.rollback()

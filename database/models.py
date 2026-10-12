@@ -101,6 +101,7 @@ class Pessoa(Base):
     perfil_id = Column(Integer, ForeignKey("perfil.id"))
     email = Column(String(200))
     ativo = Column(Boolean, default=True)
+    cor = Column(String(7))  # cor em hex (ex: "#4E79A7"), usada no Calendário e na Alocação
 
     equipa = relationship("Equipa", back_populates="pessoas")
     perfil = relationship("Perfil", back_populates="pessoas")
@@ -185,12 +186,10 @@ class Tarefa(Base):
 # ---------------------------------------------------------------------------
 # Alocacao (associativa Pessoa <-> Tarefa, com percentagem)
 # ---------------------------------------------------------------------------
+# A alocação é sempre relativa a um dia útil de 8 horas (Seg-Sex); não há
+# outras categorias -- isto simplifica o cálculo e a introdução de dados.
 TIPOS_ALOCACAO = ["percentagem", "horas"]
-CATEGORIAS_ALOCACAO = ["8h_uteis", "24h_todos"]
-CATEGORIA_LABELS = {
-    "8h_uteis": "8 horas / dias úteis",
-    "24h_todos": "24 horas / todos os dias",
-}
+HORAS_POR_DIA_UTIL = 8
 
 
 class Alocacao(Base):
@@ -203,10 +202,25 @@ class Alocacao(Base):
     data_inicio = Column(Date)
     data_fim = Column(Date)
 
-    # Novos campos: forma como o utilizador introduziu a alocação
+    # Forma como o utilizador introduziu o valor (a percentagem é sempre
+    # recalculada e é o valor usado em todos os cálculos e vistas)
     tipo = Column(String(20), default="percentagem")       # "percentagem" ou "horas"
     horas = Column(Numeric(5, 2))                            # preenchido se tipo == "horas"
-    categoria = Column(String(20), default="8h_uteis")       # "8h_uteis" ou "24h_todos"
 
     pessoa = relationship("Pessoa", back_populates="alocacoes")
     tarefa = relationship("Tarefa", back_populates="alocacoes")
+
+
+# ---------------------------------------------------------------------------
+# Feriados (geridos em Configurações > Feriados; usados para marcar o
+# Calendário e podem ser preenchidos automaticamente a partir da internet)
+# ---------------------------------------------------------------------------
+class Feriado(Base):
+    __tablename__ = "feriado"
+
+    id = Column(Integer, primary_key=True)
+    data = Column(Date, nullable=False, unique=True)
+    descricao = Column(String(200))
+
+    def __repr__(self):
+        return f"{self.data} - {self.descricao}"
