@@ -65,7 +65,7 @@ class AlocacaoRowWidget(QWidget):
         self._ao_remover = ao_remover
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.pessoa_combo = QComboBox()
         for pid, texto in pessoas:
@@ -242,14 +242,25 @@ class TarefaDialog(QDialog):
         form.addRow("Estado", self.estado_combo)
 
         # --- Alocações de pessoas ---
+        # As linhas ficam coladas ao topo, com o mesmo espaçamento vertical dos
+        # restantes campos do formulário: a "mola" no fim impede que o espaço
+        # livre da área com scroll seja repartido entre as linhas.
         self.alocacoes_container = QVBoxLayout()
+        self.alocacoes_container.setContentsMargins(0, 0, 0, 0)
+        self.alocacoes_container.setSpacing(6)
+        self.alocacoes_container.addStretch(1)
         self.linhas_alocacao = []
 
+        # Os títulos usam as mesmas proporções das linhas (3 : 2 : 2 + botão de 28 px)
         cabecalho = QHBoxLayout()
-        for texto, largura in [("Pessoa", 3), ("Tipo", 2), ("Valor", 2), ("", 1)]:
+        cabecalho.setContentsMargins(0, 0, 0, 0)
+        for texto, largura in [("Pessoa", 3), ("Tipo", 2), ("Valor", 2)]:
             lbl = QLabel(texto)
             lbl.setStyleSheet("font-weight: bold; color: #555;")
             cabecalho.addWidget(lbl, largura)
+        espaco_botao = QLabel("")
+        espaco_botao.setFixedWidth(28)
+        cabecalho.addWidget(espaco_botao)
 
         btn_add = QPushButton("+ Adicionar pessoa")
         btn_add.clicked.connect(lambda: self._adicionar_linha_alocacao())
@@ -312,7 +323,8 @@ class TarefaDialog(QDialog):
             self.pessoas, pessoa_id, percentagem, tipo, horas,
             ao_remover=self._remover_linha_alocacao,
         )
-        self.alocacoes_container.addWidget(linha)
+        # insere antes da "mola" final
+        self.alocacoes_container.insertWidget(self.alocacoes_container.count() - 1, linha)
         self.linhas_alocacao.append(linha)
 
     def _remover_linha_alocacao(self, linha):

@@ -3,7 +3,7 @@ from datetime import date
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFileDialog, QMessageBox,
-    QStyledItemDelegate, QStyle
+    QStyledItemDelegate, QStyle, QAbstractItemView
 )
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtCore import Qt, QRect
@@ -118,6 +118,8 @@ class VistaAlocacao(QWidget):
             ["Pessoa", "Equipa", "Perfil", "% Alocada no período", "Detalhe das Tarefas"]
         )
         self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabela.setEditTriggers(QAbstractItemView.NoEditTriggers)  # só consulta: sem edição por duplo clique
+        self.tabela.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._delegate_barra = BarraAlocacaoDelegate(self.tabela)
         self.tabela.setItemDelegateForColumn(3, self._delegate_barra)
         self.tabela.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)

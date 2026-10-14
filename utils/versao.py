@@ -14,10 +14,15 @@ e nos metadados do executável (version_info.txt) -- os três devem ser
 mantidos em sincronia manualmente sempre que a versão mudar aqui.
 """
 
-VERSAO = "1.5.0"
+VERSAO = "1.6.0"
 
 # Histórico resumido de versões (mais recente primeiro), para referência.
 HISTORICO_VERSOES = [
+    ("1.6.0", "Calendario: corrigido o cinzento que ficava nos cabecalhos ao mudar "
+               "de periodo (so os fins de semana ficam a cinzento); novas colunas "
+               "Data de inicio e Data fim (ordenaveis e editaveis por clique); "
+               "Alocacao: deixa de permitir edicao por duplo clique; Atividade: "
+               "espacamento das pessoas alocadas igual ao dos restantes campos."),
     ("1.5.0", "Feriados (Configuracoes > Feriados) com importacao automatica da "
                "internet, marcados no calendario; cor por pessoa usada nas barras "
                "do calendario e da alocacao (barras proporcionais); alocacao sempre "

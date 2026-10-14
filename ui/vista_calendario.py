@@ -2,11 +2,12 @@ from datetime import date
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QPushButton,
-    QTableWidget, QHeaderView, QGroupBox, QFileDialog, QMessageBox, QMenu,
-    QInputDialog, QStyledItemDelegate, QStyle, QAbstractItemView
+    QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFileDialog, QMessageBox, QMenu,
+    QInputDialog, QStyledItemDelegate, QStyle, QAbstractItemView, QDialog, QDialogButtonBox,
+    QDateEdit
 )
 from PySide6.QtGui import QColor, QPainter, QCursor
-from PySide6.QtCore import Qt, QRect, QTimer
+from PySide6.QtCore import Qt, QRect, QTimer, QDate
 from sqlalchemy.orm import selectinload
 
 from database.db import get_session, listar_estados_tarefa, conjunto_datas_feriados
@@ -31,7 +32,13 @@ MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out"
 COR_FIM_SEMANA = "#E3E3E3"
 COR_FERIADO = "#F8D7DA"
 
-N_BASE = 6  # Cliente, Projeto, Atividade, Pessoa, % Alocação, Estado da Atividade
+# Colunas fixas (antes das colunas dos dias/meses)
+CABECALHOS_BASE = [
+    "Cliente", "Projeto", "Atividade", "Data de início", "Data fim",
+    "Pessoa", "% Alocação", "Estado da Atividade",
+]
+C_CLIENTE, C_PROJETO, C_ATIVIDADE, C_INICIO, C_FIM, C_PESSOA, C_PCT, C_ESTADO = range(8)
+N_BASE = len(CABECALHOS_BASE)
 
 # Dados guardados em cada linha (apenas inteiros/números simples)
 R_TAREFA = Qt.UserRole
@@ -71,6 +78,7 @@ class VistaCalendario(QWidget):
 
     Cliques:
       - Cliente / Projeto / Atividade: abre a janela de edição do registo.
+      - Data de início / Data fim: abre um calendário para mudar a data da atividade.
       - Pessoa: mostra a lista de pessoas para trocar a pessoa alocada
         (e uma opção para editar a pessoa atual).
       - % Alocação: pergunta se o valor é em percentagem ou horas, e pede o valor.
@@ -135,8 +143,8 @@ class VistaCalendario(QWidget):
         filtros_box.setLayout(filtros_form)
         layout.addWidget(filtros_box)
 
-        dica = QLabel("Clica num Cliente, Projeto ou Atividade para o editar; clica na Pessoa, na "
-                      "% de Alocação ou no Estado para os alterar diretamente. "
+        dica = QLabel("Clica num Cliente, Projeto ou Atividade para o editar; clica nas Datas, na Pessoa, "
+                      "na % de Alocação ou no Estado para os alterar diretamente. "
                       "Cinzento = fim de semana; rosa = feriado (sem alocação).")
         dica.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(dica)
@@ -309,7 +317,6 @@ class VistaCalendario(QWidget):
         periodo_ini, periodo_fim = intervalo_periodo(periodo, self.referencia)
 
         colunas_periodo = self._colunas_periodo()
-        cabecalhos_base = ["Cliente", "Projeto", "Atividade", "Pessoa", "% Alocação", "Estado da Atividade"]
 
         session = get_session()
         try:
@@ -325,8 +332,13 @@ class VistaCalendario(QWidget):
             self.tabela.setSortingEnabled(False)
             self.tabela.clearContents()
             self.tabela.setColumnCount(N_BASE + len(colunas_periodo))
-            self.tabela.setHorizontalHeaderLabels(cabecalhos_base + [c[0] for c in colunas_periodo])
-            # Cor de fundo (e dica) por coluna: None = dia útil normal
+            # Itens de cabeçalho NOVOS em cada atualização. O Qt reaproveita os itens
+            # existentes em setHorizontalHeaderLabels, por isso a cor de fim de semana
+            # de uma vista (ex: a coluna 12 ser Domingo na vista semanal) ficava
+            # "colada" a essa posição ao mudar de período (ex: em "Seg 7" ou em "Jun").
+            for i, texto in enumerate(CABECALHOS_BASE + [c[0] for c in colunas_periodo]):
+                self.tabela.setHorizontalHeaderItem(i, QTableWidgetItem(texto))
+            # Cor de fundo (e dica) por coluna: só fins de semana e feriados
             cor_coluna = {}
             if periodo != "Anual":
                 for off, (_rot, c_ini, _c_fim) in enumerate(colunas_periodo):
@@ -336,10 +348,9 @@ class VistaCalendario(QWidget):
                         cor_coluna[off] = (COR_FIM_SEMANA, "Fim de semana")
                 for off, (cor, dica_col) in cor_coluna.items():
                     cab = self.tabela.horizontalHeaderItem(N_BASE + off)
-                    if cab is not None:
-                        cab.setBackground(QColor(cor))
-                        cab.setForeground(QColor("#000000"))
-                        cab.setToolTip(dica_col)
+                    cab.setBackground(QColor(cor))
+                    cab.setForeground(QColor("#000000"))
+                    cab.setToolTip(dica_col)
             header = self.tabela.horizontalHeader()
             for i in range(N_BASE):
                 header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
@@ -353,7 +364,10 @@ class VistaCalendario(QWidget):
                 valores = [
                     cliente.nome if cliente else "",
                     t.projeto.nome if t.projeto else "",
-                    t.nome, a.pessoa.nome, fmt_pct(a.percentagem), t.estado,
+                    t.nome,
+                    t.data_inicio.isoformat() if t.data_inicio else "",
+                    t.data_fim.isoformat() if t.data_fim else "",
+                    a.pessoa.nome, fmt_pct(a.percentagem), t.estado,
                 ]
                 for col, valor in enumerate(valores):
                     item = ItemOrdenavel(valor)
@@ -363,7 +377,7 @@ class VistaCalendario(QWidget):
                     item.setData(R_PROJETO, int(t.projeto_id or 0))
                     item.setData(R_CLIENTE, int(cliente.id) if cliente else 0)
                     item.setData(R_PCT, float(a.percentagem or 0))
-                    item.setToolTip("Clica para editar" if col != 4 and col != 5 else "Clica para alterar")
+                    item.setToolTip("Clica para editar" if col in (C_CLIENTE, C_PROJETO, C_ATIVIDADE) else "Clica para alterar")
                     self.tabela.setItem(row, col, item)
 
                 cor = self._cores_pessoas.get(a.pessoa.id) or cor_da_pessoa(a.pessoa.cor, a.pessoa.id)
@@ -395,19 +409,26 @@ class VistaCalendario(QWidget):
         if item is None:
             return
         tarefa_id = item.data(R_TAREFA) or 0
-        if col == 0:
+        def texto(c):
+            it = self.tabela.item(row, c)
+            return it.text() if it is not None else ""
+
+        if col == C_CLIENTE:
             acao = ("cliente", item.data(R_CLIENTE) or 0)
-        elif col == 1:
+        elif col == C_PROJETO:
             acao = ("projeto", item.data(R_PROJETO) or 0)
-        elif col == 2:
+        elif col == C_ATIVIDADE:
             acao = ("tarefa", tarefa_id)
-        elif col == 3:
+        elif col == C_INICIO:
+            acao = ("data", tarefa_id, "inicio", texto(C_INICIO))
+        elif col == C_FIM:
+            acao = ("data", tarefa_id, "fim", texto(C_FIM))
+        elif col == C_PESSOA:
             acao = ("pessoa", item.data(R_ALOC) or 0, item.data(R_PESSOA) or 0)
-        elif col == 4:
+        elif col == C_PCT:
             acao = ("pct", item.data(R_ALOC) or 0, float(item.data(R_PCT) or 0))
         else:
-            estado_item = self.tabela.item(row, 5)
-            acao = ("estado", tarefa_id, estado_item.text() if estado_item else "")
+            acao = ("estado", tarefa_id, texto(C_ESTADO))
         QTimer.singleShot(0, lambda a=acao: self._executar_acao(a))
 
     def _executar_acao(self, acao):
@@ -420,6 +441,8 @@ class VistaCalendario(QWidget):
                     return
                 editor(registo_id)
                 self.refresh_filtros()
+            elif tipo == "data":
+                self._alterar_data(acao[1], acao[2], acao[3])
             elif tipo == "pessoa":
                 self._alterar_pessoa(acao[1], acao[2])
             elif tipo == "estado":
@@ -428,6 +451,78 @@ class VistaCalendario(QWidget):
                 self._alterar_percentagem(acao[1], acao[2])
         except Exception as exc:
             QMessageBox.critical(self, "Erro", f"Não foi possível concluir a ação:\n\n{exc}")
+
+    # --- datas da atividade ---
+    def _pedir_data(self, titulo, atual):
+        """Abre um calendário para escolher uma data. Devolve a data ou None se cancelar."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(titulo)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"{titulo}:"))
+        edit = QDateEdit(calendarPopup=True)
+        edit.setDate(QDate(atual.year, atual.month, atual.day))
+        layout.addWidget(edit)
+        botoes = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        botoes.accepted.connect(dialog.accept)
+        botoes.rejected.connect(dialog.reject)
+        layout.addWidget(botoes)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        return edit.date().toPython()
+
+    def _alterar_data(self, tarefa_id, campo, atual_iso):
+        if not tarefa_id:
+            return
+        try:
+            atual = date.fromisoformat(atual_iso)
+        except (TypeError, ValueError):
+            atual = date.today()
+        titulo = "Data de início da atividade" if campo == "inicio" else "Data fim da atividade"
+        nova = self._pedir_data(titulo, atual)
+        if nova is None or nova == atual:
+            return
+        self._gravar_data(tarefa_id, campo, nova)
+
+    def _gravar_data(self, tarefa_id, campo, nova_data, confirmar_sobrealocacao=True):
+        session = get_session()
+        try:
+            tarefa = session.get(Tarefa, tarefa_id)
+            if tarefa is None:
+                return
+            ini = nova_data if campo == "inicio" else tarefa.data_inicio
+            fim = nova_data if campo == "fim" else tarefa.data_fim
+            if ini and fim and fim < ini:
+                QMessageBox.warning(
+                    self, "Datas inválidas",
+                    "A data de fim não pode ser anterior à data de início."
+                )
+                return
+            if confirmar_sobrealocacao:
+                # com o novo período, as pessoas alocadas podem ficar sobre-alocadas
+                conflitos = verificar_sobrealocacoes(
+                    session, tarefa.id, ini, fim,
+                    [(a.pessoa_id, float(a.percentagem or 0)) for a in tarefa.alocacoes]
+                )
+                if conflitos:
+                    resp = QMessageBox.warning(
+                        self, "Sobre-alocação detetada",
+                        "Com estas datas, as seguintes pessoas ficariam acima de 100% em período sobreposto:\n\n"
+                        + "\n".join(conflitos) + "\n\nQueres gravar mesmo assim?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                    )
+                    if resp != QMessageBox.Yes:
+                        return
+            if campo == "inicio":
+                tarefa.data_inicio = nova_data
+            else:
+                tarefa.data_fim = nova_data
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        self._atualizar()
 
     # --- estado da atividade ---
     def _escolher_estado(self, estados, atual):

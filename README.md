@@ -218,6 +218,20 @@ O que **não** está resolvido, por implicar custos:
   corrigido em 24-48h e ajuda a "reputação" do ficheiro para todos os
   utilizadores.
 
+## Alterações da v1.6.0
+
+- **Calendário**: corrigido o cinzento que ficava nos cabeçalhos ao mudar de
+  período (o Qt reaproveitava os itens do cabeçalho, e a cor de fim de semana
+  ficava "colada" à posição da coluna). Agora só os fins de semana ficam a
+  cinzento (e os feriados a rosa), em qualquer período.
+- **Calendário**: novas colunas **Data de início** e **Data fim** (entre
+  Atividade e Pessoa). São ordenáveis e, ao clicar, abre-se um calendário
+  para mudar a data (com validação fim ≥ início e aviso de sobre-alocação).
+- **Alocação**: a tabela passa a ser só de consulta (o duplo clique já não
+  entra em modo de edição).
+- **Atividade**: as pessoas alocadas ficam juntas, com o mesmo espaçamento
+  dos restantes campos.
+
 ## Funcionalidades adicionadas (v1.5.0)
 
 - **Feriados** (*Configurações > Feriados*): lista de feriados que podes
